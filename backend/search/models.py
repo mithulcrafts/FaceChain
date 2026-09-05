@@ -18,6 +18,10 @@ class CandidateResult(BaseModel):
     snippet: str = Field(default="", description="Text snippet or caption from the post")
     source: str = Field(default="", description="Source domain or platform (e.g. twitter.com)")
     search_rank: int = Field(default=1, description="Rank position in search results (1-indexed)")
+    discovery_method: str = Field(
+        default="full_image", 
+        description="Search variant that discovered this candidate: full_image, face_crop, or both"
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert CandidateResult to dictionary format."""

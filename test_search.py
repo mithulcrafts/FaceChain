@@ -97,7 +97,7 @@ def run_mock_demo():
             mock_post.return_value = MagicMock(status_code=200, ok=True, json=lambda: {"image_id": "mock_id"})
             mock_get.return_value = MagicMock(status_code=200, ok=True, json=lambda: mock_serpapi_response)
 
-            result = pipeline.run(image_path=sample_img, max_search_results=5)
+            result = pipeline.run(image_path=sample_img, results_per_search=30, max_candidates=50)
     finally:
         if sample_img.exists():
             sample_img.unlink()
@@ -109,29 +109,30 @@ def run_mock_demo():
     print(f"ArcFace Embedding Dim:  {len(result.primary_face.embedding)} dimensions")
     print(f"Embedding Vector (1st 5): {result.primary_face.embedding[:5]}")
 
-    print("\n--- STEP 2: GENUINE WEB SEARCH COMPLETE ---")
-    print(f"Extracted {len(result.candidates)} CandidateResult objects:")
+    print("\n--- STEP 2: DUAL WEB SEARCH (FULL IMAGE + FACE CROP) COMPLETE ---")
+    print(f"Extracted {len(result.candidates)} merged CandidateResult objects:")
     for res in result.candidates:
         print(f"\n[Rank {res.search_rank}] UUID: {res.candidate_id}")
-        print(f"  URL:       {res.url}")
-        print(f"  Image URL: {res.image_url}")
-        print(f"  Title:     {res.title}")
-        print(f"  Source:    {res.source}")
+        print(f"  URL:              {res.url}")
+        print(f"  Image URL:        {res.image_url}")
+        print(f"  Title:            {res.title}")
+        print(f"  Source:           {res.source}")
+        print(f"  Discovery Method: {res.discovery_method}")
 
     assert len(result.candidates) == 2
     assert len(result.primary_face.embedding) == 512
-    print("\n[OK] PERSON 1 PIPELINE DEMO PASSED: Face Processing & Web Search integrated successfully.")
+    print("\n[OK] PERSON 1 PIPELINE DEMO PASSED: Dual-Search (Full Image + Face Crop) integrated successfully.")
 
 
 def run_live_demo(image_path: str):
-    """Execute Person 1 End-to-End Pipeline (Face Processing + Live SerpApi Search)."""
+    """Execute Person 1 End-to-End Dual Search Pipeline (Face Processing + Live SerpApi Search)."""
     print("\n" + "=" * 60)
-    print(f"RUNNING DEMO: [LIVE MODE] Person 1 Pipeline ({image_path})")
+    print(f"RUNNING DEMO: [LIVE MODE] Person 1 Dual Search Pipeline ({image_path})")
     print("=" * 60)
 
     try:
         pipeline = Person1Pipeline()
-        result = pipeline.run(image_path=image_path, max_search_results=10)
+        result = pipeline.run(image_path=image_path, results_per_search=30, max_candidates=50)
 
         print("\n--- STEP 1: FACE PROCESSING COMPLETE ---")
         print(f"Faces Detected:         {result.detected_faces_count}")
@@ -139,19 +140,20 @@ def run_live_demo(image_path: str):
         print(f"Face Bounding Box:      {result.primary_face.bbox}")
         print(f"ArcFace Embedding Dim:  {len(result.primary_face.embedding)} dimensions")
 
-        print("\n--- STEP 2: GENUINE WEB SEARCH COMPLETE ---")
+        print("\n--- STEP 2: DUAL WEB SEARCH (FULL IMAGE + FACE CROP) COMPLETE ---")
         if not result.candidates:
             print("No matching web results found for the input image.")
             return
 
-        print(f"Retrieved {len(result.candidates)} live candidate results from SerpApi Google Lens:")
+        print(f"Retrieved {len(result.candidates)} merged candidate results (max cap: 50):")
         for res in result.candidates:
             print(f"\n[Rank {res.search_rank}] Candidate ID: {res.candidate_id}")
-            print(f"  URL:       {res.url}")
-            print(f"  Image URL: {res.image_url}")
-            print(f"  Title:     {res.title}")
-            print(f"  Source:    {res.source}")
-            print(f"  Snippet:   {res.snippet}")
+            print(f"  URL:              {res.url}")
+            print(f"  Image URL:        {res.image_url}")
+            print(f"  Title:            {res.title}")
+            print(f"  Source:           {res.source}")
+            print(f"  Discovery Method: {res.discovery_method}")
+            print(f"  Snippet:          {res.snippet}")
 
     except NoFaceDetectedError as err:
         logger.error(f"Face Processing Error: {err}")

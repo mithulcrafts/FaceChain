@@ -183,3 +183,47 @@ class FaceProcessor:
             )
 
         return faces[0]
+
+    def create_face_crop(
+        self,
+        image_input: Union[str, Path, np.ndarray],
+        bbox: List[float],
+        margin_ratio: float = 0.2
+    ) -> np.ndarray:
+        """
+        Crop face from input image with a margin around the bounding box.
+
+        :param image_input: Local file path or OpenCV BGR NumPy array.
+        :param bbox: Face bounding box coordinates [x1, y1, x2, y2].
+        :param margin_ratio: Margin proportion around face box (default 0.2 = 20%).
+        :return: Cropped BGR NumPy image array.
+        :raises InvalidImageError: If the input image is invalid or crop produces an empty array.
+        """
+        if isinstance(image_input, (str, Path)):
+            img_bgr = cv2.imread(str(image_input))
+            if img_bgr is None:
+                raise InvalidImageError(f"Failed to read image at path: {image_input}")
+        elif isinstance(image_input, np.ndarray):
+            img_bgr = image_input
+        else:
+            raise InvalidImageError(f"Unsupported image input type: {type(image_input)}")
+
+        img_h, img_w = img_bgr.shape[:2]
+        x1, y1, x2, y2 = bbox
+
+        w = x2 - x1
+        h = y2 - y1
+
+        margin_w = w * margin_ratio
+        margin_h = h * margin_ratio
+
+        crop_x1 = max(0, int(round(x1 - margin_w)))
+        crop_y1 = max(0, int(round(y1 - margin_h)))
+        crop_x2 = min(img_w, int(round(x2 + margin_w)))
+        crop_y2 = min(img_h, int(round(y2 + margin_h)))
+
+        crop_bgr = img_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+        if crop_bgr.size == 0:
+            raise InvalidImageError(f"Calculated face crop produces empty image box: [{crop_x1}, {crop_y1}, {crop_x2}, {crop_y2}]")
+
+        return crop_bgr
