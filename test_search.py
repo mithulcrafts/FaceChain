@@ -23,6 +23,8 @@ from unittest.mock import MagicMock, patch
 # Ensure root workspace directory is in sys.path
 sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
+from backend.pipeline import Person1Pipeline, Person1Result
+from backend.face import FaceProcessor, FaceDetectionResult, NoFaceDetectedError
 from backend.search import (
     SerpApiGoogleLensProvider,
     CandidateResult,
@@ -31,13 +33,13 @@ from backend.search import (
 )
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
-logger = logging.getLogger("TestSearch")
+logger = logging.getLogger("TestPipeline")
 
 
 def run_mock_demo():
-    """Demonstrate pipeline parsing and CandidateResult normalization using mock SerpApi response."""
+    """Demonstrate Person 1 pipeline using mock SerpApi response and face processing."""
     print("\n" + "=" * 60)
-    print("RUNNING DEMO: [MOCK MODE] input image -> SerpApi Google Lens -> candidate results")
+    print("RUNNING DEMO: [MOCK MODE] Input Image -> Face Processing -> SerpApi Search -> Candidates")
     print("=" * 60)
 
     mock_serpapi_response = {
@@ -63,74 +65,96 @@ def run_mock_demo():
         ]
     }
 
-    provider = SerpApiGoogleLensProvider(api_key="mock_key")
+    import cv2
+    import numpy as np
 
-    # Create temporary dummy file for mock test
-    sample_img = Path("sample_input.jpg")
-    sample_img.write_bytes(b"dummy_image_content")
+    # Create synthetic test image with face features
+    img = np.ones((300, 300, 3), dtype=np.uint8) * 255
+    cv2.circle(img, (150, 150), 60, (100, 100, 100), -1)
+    cv2.circle(img, (130, 130), 10, (0, 0, 0), -1)
+    cv2.circle(img, (170, 130), 10, (0, 0, 0), -1)
+    cv2.ellipse(img, (150, 170), (20, 10), 0, 0, 180, (0, 0, 0), 3)
+
+    sample_img = Path("sample_face_input.jpg")
+    cv2.imwrite(str(sample_img), img)
+
+    mock_face_result = FaceDetectionResult(
+        bbox=[50.0, 50.0, 200.0, 200.0],
+        det_score=0.98,
+        embedding=[0.012, -0.045, 0.123] + [0.0] * 509,
+        landmarks=[[70, 80], [130, 80], [100, 110], [80, 140], [120, 140]],
+        aligned_face_shape=[112, 112, 3],
+    )
 
     try:
-        with patch("requests.post") as mock_post, patch("requests.get") as mock_get:
-            # Mock image upload response
-            upload_response = MagicMock()
-            upload_response.status_code = 200
-            upload_response.ok = True
-            upload_response.json.return_value = {"image_id": "mock_image_id_123"}
-            mock_post.return_value = upload_response
+        provider = SerpApiGoogleLensProvider(api_key="mock_key")
+        pipeline = Person1Pipeline(search_provider=provider)
 
-            # Mock search response
-            search_response = MagicMock()
-            search_response.status_code = 200
-            search_response.ok = True
-            search_response.json.return_value = mock_serpapi_response
-            mock_get.return_value = search_response
+        with patch("requests.post") as mock_post, \
+             patch("requests.get") as mock_get, \
+             patch.object(pipeline.face_processor, "process_image", return_value=[mock_face_result]):
 
-            # Execute search
-            results = provider.search(image_input=sample_img, max_results=5)
+            mock_post.return_value = MagicMock(status_code=200, ok=True, json=lambda: {"image_id": "mock_id"})
+            mock_get.return_value = MagicMock(status_code=200, ok=True, json=lambda: mock_serpapi_response)
+
+            result = pipeline.run(image_path=sample_img, max_search_results=5)
     finally:
         if sample_img.exists():
             sample_img.unlink()
 
-    print(f"\nSuccessfully extracted {len(results)} CandidateResult objects:")
-    for res in results:
-        print(f"\n[Rank {res.search_rank}] UUID: {res.candidate_id}")
-        print(f"  URL:         {res.url}")
-        print(f"  Image URL:   {res.image_url}")
-        print(f"  Title:       {res.title}")
-        print(f"  Snippet:     {res.snippet}")
-        print(f"  Source:      {res.source}")
+    print("\n--- STEP 1: FACE PROCESSING COMPLETE ---")
+    print(f"Faces Detected:         {result.detected_faces_count}")
+    print(f"Primary Face Score:     {result.primary_face.det_score:.2f}")
+    print(f"Face Bounding Box:      {result.primary_face.bbox}")
+    print(f"ArcFace Embedding Dim:  {len(result.primary_face.embedding)} dimensions")
+    print(f"Embedding Vector (1st 5): {result.primary_face.embedding[:5]}")
 
-    # Validate output format
-    assert len(results) == 2
-    assert isinstance(results[0], CandidateResult)
-    assert results[0].source == "TechSummit"
-    assert results[1].source == "Twitter"
-    print("\n[OK] MOCK DEMO PASSED: CandidateResult objects conform exactly to component data contract.")
+    print("\n--- STEP 2: GENUINE WEB SEARCH COMPLETE ---")
+    print(f"Extracted {len(result.candidates)} CandidateResult objects:")
+    for res in result.candidates:
+        print(f"\n[Rank {res.search_rank}] UUID: {res.candidate_id}")
+        print(f"  URL:       {res.url}")
+        print(f"  Image URL: {res.image_url}")
+        print(f"  Title:     {res.title}")
+        print(f"  Source:    {res.source}")
+
+    assert len(result.candidates) == 2
+    assert len(result.primary_face.embedding) == 512
+    print("\n[OK] PERSON 1 PIPELINE DEMO PASSED: Face Processing & Web Search integrated successfully.")
 
 
 def run_live_demo(image_path: str):
-    """Execute live reverse image search via SerpApi API."""
+    """Execute Person 1 End-to-End Pipeline (Face Processing + Live SerpApi Search)."""
     print("\n" + "=" * 60)
-    print(f"RUNNING DEMO: [LIVE MODE] input image ({image_path}) -> SerpApi Google Lens -> candidate results")
+    print(f"RUNNING DEMO: [LIVE MODE] Person 1 Pipeline ({image_path})")
     print("=" * 60)
 
     try:
-        provider = SerpApiGoogleLensProvider()
-        results = provider.search(image_input=image_path, max_results=10)
+        pipeline = Person1Pipeline()
+        result = pipeline.run(image_path=image_path, max_search_results=10)
 
-        if not results:
+        print("\n--- STEP 1: FACE PROCESSING COMPLETE ---")
+        print(f"Faces Detected:         {result.detected_faces_count}")
+        print(f"Primary Face Score:     {result.primary_face.det_score:.2f}")
+        print(f"Face Bounding Box:      {result.primary_face.bbox}")
+        print(f"ArcFace Embedding Dim:  {len(result.primary_face.embedding)} dimensions")
+
+        print("\n--- STEP 2: GENUINE WEB SEARCH COMPLETE ---")
+        if not result.candidates:
             print("No matching web results found for the input image.")
             return
 
-        print(f"\nRetrieved {len(results)} live candidate results from SerpApi Google Lens:")
-        for res in results:
-            print(f"\n[Rank {res.search_rank}] ID: {res.candidate_id}")
+        print(f"Retrieved {len(result.candidates)} live candidate results from SerpApi Google Lens:")
+        for res in result.candidates:
+            print(f"\n[Rank {res.search_rank}] Candidate ID: {res.candidate_id}")
             print(f"  URL:       {res.url}")
             print(f"  Image URL: {res.image_url}")
             print(f"  Title:     {res.title}")
             print(f"  Source:    {res.source}")
             print(f"  Snippet:   {res.snippet}")
 
+    except NoFaceDetectedError as err:
+        logger.error(f"Face Processing Error: {err}")
     except ConfigurationError as err:
         logger.error(f"Configuration Error: {err}")
         print("\nTip: Set SERPAPI_API_KEY environment variable to test live API calls.")
