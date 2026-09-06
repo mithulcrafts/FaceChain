@@ -48,8 +48,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--accept-score-floor",
         type=float,
-        default=0.85,
-        help="Accept top matched candidate when overall score clears this floor",
+        default=None,
+        help="Demo-only score floor; requires --allow-score-floor-fallback",
+    )
+    run_parser.add_argument(
+        "--allow-score-floor-fallback",
+        action="store_true",
+        help="Allow demo fallback when ranking is ambiguous; strict mode is the default",
     )
     run_parser.add_argument("--no-anchor", action="store_true", help="Stop after evidence generation")
     run_parser.add_argument("--no-verify", action="store_true", help="Skip on-chain verification after anchor")
@@ -73,7 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    pipeline = FaceChainPipeline(accept_score_floor=args.accept_score_floor)
+    pipeline = FaceChainPipeline(
+        accept_score_floor=args.accept_score_floor,
+        allow_score_floor_fallback=args.allow_score_floor_fallback,
+    )
     result = pipeline.run(
         args.image_path,
         results_per_search=args.results_per_search,

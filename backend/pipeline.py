@@ -230,13 +230,15 @@ class FaceChainPipeline:
         validator: Optional[CandidateValidator] = None,
         evidence_builder: Optional[EvidenceBuilder] = None,
         blockchain_client: Optional[EvidenceRegistryClient] = None,
-        accept_score_floor: float = 0.85,
+        accept_score_floor: Optional[float] = None,
+        allow_score_floor_fallback: bool = False,
     ):
         self.person1_pipeline = person1_pipeline or Person1Pipeline()
         self.validator = validator or CandidateValidator()
         self.evidence_builder = evidence_builder or EvidenceBuilder()
         self.blockchain_client = blockchain_client
         self.accept_score_floor = accept_score_floor
+        self.allow_score_floor_fallback = allow_score_floor_fallback
 
     def run(
         self,
@@ -321,6 +323,8 @@ class FaceChainPipeline:
             )
 
     def _accept_by_score_floor(self, validation: ValidationDecision) -> Optional[CandidateValidationResult]:
+        if not self.allow_score_floor_fallback or self.accept_score_floor is None:
+            return None
         if not validation.ranked:
             return None
 

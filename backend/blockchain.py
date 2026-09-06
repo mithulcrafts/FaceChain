@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -69,6 +70,16 @@ def _parse_tuple(text: str) -> Tuple[str, ...]:
         single = single[1:-1]
     reader = csv.reader([single], delimiter=",", quotechar='"', skipinitialspace=True)
     return tuple(next(reader))
+
+
+def _receipt_succeeded(output: str) -> bool:
+    """Return the EVM receipt status from human-readable cast output."""
+    match = re.search(r"(?im)^\s*status\s+(0x[0-9a-f]+|[01]|success|failed)\b", output)
+    if not match:
+        raise BlockchainError(f"Could not find transaction status in cast receipt: {output}")
+
+    status = match.group(1).lower()
+    return status in {"1", "0x1", "success"}
 
 
 def _run_cast(
@@ -160,20 +171,35 @@ class EvidenceRegistryClient:
                     raise BlockchainError(f"Could not parse transaction hash from cast send output: {tx_hash}")
                 tx_hash = match.group(0)
 
-            _run_cast(
+            receipt = _run_cast(
                 ["receipt", tx_hash],
                 rpc_url=self.rpc_url,
                 chain_id=self.chain_id,
                 include_chain=False,
             )
+            if not _receipt_succeeded(receipt):
+                raise BlockchainError(f"Anchor transaction reverted: {tx_hash}")
         except BlockchainError as exc:
             if "EvidenceAlreadyAnchored" not in str(exc):
                 raise
             logger.info("Evidence already anchored on-chain; reusing existing record.")
 
-        exists, submitter, timestamp, stored_source = self.get_evidence(evidence_hash)
+        # Some RPC providers expose the receipt before their read path catches up.
+        # Retry briefly, while keeping the final result strictly read-back verified.
+        exists = False
+        submitter = ""
+        timestamp = 0
+        stored_source = ""
+        for attempt in range(5):
+            exists, submitter, timestamp, stored_source = self.get_evidence(evidence_hash)
+            if exists:
+                break
+            if attempt < 4:
+                time.sleep(1)
         if not exists:
-            raise BlockchainError("Anchor tx mined but evidence missing from registry")
+            raise BlockchainError(
+                f"Anchor transaction mined but evidence missing from registry: {evidence_hash}"
+            )
 
         return AnchorResult(
             evidence_hash=evidence_hash,

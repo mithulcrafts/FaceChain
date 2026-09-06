@@ -87,7 +87,9 @@ Flags:
 
 - `run` does full search + validation + blockchain
 - `--no-anchor` stops after evidence generation
-- `--no-verify` anchors only
+- `--no-verify` anchors only; omit it for on-chain read-back verification
+- strict mode rejects ambiguous candidates and never anchors them
+- `--accept-score-floor X --allow-score-floor-fallback` is a demo-only override for high-scoring but ambiguous results
 - `person1` runs only face processing + search
 - `verify-evidence` reads already anchored evidence from chain
 

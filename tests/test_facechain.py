@@ -114,6 +114,7 @@ class TestFaceChainPipeline(unittest.TestCase):
             evidence_builder=evidence_builder,
             blockchain_client=blockchain_client,
             accept_score_floor=0.85,
+            allow_score_floor_fallback=True,
         )
         result = pipeline.run(Path("/tmp/input.jpg"))
 
@@ -121,6 +122,54 @@ class TestFaceChainPipeline(unittest.TestCase):
         self.assertEqual(result.reason, "anchored and verified")
         self.assertIsNotNone(result.accepted_candidate)
         self.assertEqual(result.accepted_candidate.candidate.candidate_id, "candidate-1")
+
+    def test_strict_mode_does_not_promote_ambiguous_result(self):
+        candidate = CandidateResult(
+            candidate_id="candidate-1",
+            url="https://example.com/post/1",
+            image_url="https://example.com/image.jpg",
+            title="Found Post",
+            source="example.com",
+        )
+        face = FaceDetectionResult(
+            bbox=[0.0, 0.0, 10.0, 10.0],
+            det_score=0.99,
+            embedding=[0.5] * 512,
+            landmarks=None,
+            aligned_face_shape=None,
+        )
+        person1_pipeline = MagicMock()
+        person1_pipeline.run.return_value = Person1Result(
+            input_image_path="/tmp/input.jpg",
+            primary_face=face,
+            detected_faces_count=1,
+            candidates=[candidate],
+        )
+        validator = MagicMock()
+        validator.rank_candidates.return_value = ValidationDecision(
+            accepted=None,
+            ranked=[CandidateValidationResult(
+                candidate=candidate,
+                matched=True,
+                overall_score=0.95,
+                reason="accepted",
+            )],
+            margin=0.001,
+            reason="ambiguous candidates",
+        )
+        blockchain_client = MagicMock()
+        pipeline = FaceChainPipeline(
+            person1_pipeline=person1_pipeline,
+            validator=validator,
+            blockchain_client=blockchain_client,
+            accept_score_floor=0.85,
+        )
+
+        result = pipeline.run(Path("/tmp/input.jpg"))
+
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(result.reason, "ambiguous candidates")
+        blockchain_client.anchor_evidence.assert_not_called()
 
     def test_full_pipeline_smoke_with_real_validator_and_mocked_chain(self):
         with tempfile.TemporaryDirectory() as tmpdir:

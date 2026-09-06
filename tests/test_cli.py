@@ -18,7 +18,8 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(args.command, "run")
         self.assertEqual(args.image_path, Path("input.jpg"))
         self.assertTrue(args.no_anchor)
-        self.assertAlmostEqual(args.accept_score_floor, 0.85)
+        self.assertIsNone(args.accept_score_floor)
+        self.assertFalse(args.allow_score_floor_fallback)
 
     @patch("backend.cli.FaceChainPipeline")
     def test_run_command_prints_json(self, mock_pipeline_cls):

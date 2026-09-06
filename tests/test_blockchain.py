@@ -6,7 +6,7 @@ import unittest
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
-from backend.blockchain import EvidenceRegistryClient
+from backend.blockchain import BlockchainError, EvidenceRegistryClient
 
 
 class TestBlockchainClient(unittest.TestCase):
@@ -14,7 +14,7 @@ class TestBlockchainClient(unittest.TestCase):
     def test_anchor_evidence_runs_cast_and_parses_output(self, mock_run):
         mock_run.side_effect = [
             CompletedProcess(args=[], returncode=0, stdout="0x" + "1" * 64 + "\n", stderr=""),
-            CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            CompletedProcess(args=[], returncode=0, stdout="status 1\n", stderr=""),
             CompletedProcess(
                 args=[],
                 returncode=0,
@@ -38,6 +38,23 @@ class TestBlockchainClient(unittest.TestCase):
         receipt_cmd = mock_run.call_args_list[1].args[0]
         self.assertIn("receipt", receipt_cmd)
         self.assertNotIn("--chain", receipt_cmd)
+
+    @patch("subprocess.run")
+    def test_anchor_rejects_reverted_transaction(self, mock_run):
+        mock_run.side_effect = [
+            CompletedProcess(args=[], returncode=0, stdout="0x" + "1" * 64 + "\n", stderr=""),
+            CompletedProcess(args=[], returncode=0, stdout="status 0\n", stderr=""),
+        ]
+
+        client = EvidenceRegistryClient(
+            registry_address="0x1234567890abcdef1234567890abcdef12345678",
+            rpc_url="http://127.0.0.1:8545",
+            private_key="0x" + "2" * 64,
+            chain_id=84532,
+        )
+        with self.assertRaisesRegex(BlockchainError, "Anchor transaction reverted"):
+            client.anchor_evidence("0x" + "a" * 64, "example.com")
+        self.assertEqual(mock_run.call_count, 2)
 
     @patch("subprocess.run")
     def test_verify_evidence_parses_registry_output(self, mock_run):
