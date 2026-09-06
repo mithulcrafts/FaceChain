@@ -30,7 +30,6 @@ from backend.search.models import CandidateResult
 
 logger = logging.getLogger(__name__)
 
-
 def download_candidate_image(url, save_path):
     print(f"[*] Attempting to download candidate image from: {url}")
 
@@ -38,7 +37,6 @@ def download_candidate_image(url, save_path):
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-
         with open(save_path, "wb") as file:
             file.write(response.content)
 
@@ -48,7 +46,6 @@ def download_candidate_image(url, save_path):
     except requests.exceptions.RequestException as e:
         print(f"[-] ERROR: Failed to download image. Reason: {e}")
         return False
-
 
 def _normalize_domain(value: str) -> str:
     if not value:
