@@ -8,6 +8,8 @@ Foundry slice for FaceChain blockchain anchoring and verification.
 - Store only hash, source, submitter, and timestamp.
 - Verify anchored evidence on-chain.
 - Fail closed on duplicate, empty source, or empty hash.
+- Pair search-stage validation with deterministic evidence hashing.
+- Keep off-chain data minimal. Save only what is needed to prove provenance.
 
 ## Contract
 
@@ -30,6 +32,64 @@ forge script script/DeployEvidenceRegistry.s.sol:DeployEvidenceRegistry \
   --broadcast \
   --verify
 ```
+
+## Full pipeline
+
+The backend pipeline is:
+
+1. Face detect and embed input image.
+2. Run genuine reverse-image search with SerpApi Google Lens on:
+   - full input image
+   - face crop
+3. Merge and deduplicate candidates.
+4. Validate top candidates with:
+   - face embedding similarity
+   - image similarity
+   - source consistency
+   - completeness
+5. Canonicalize accepted evidence.
+6. Compute `sha256` hash.
+7. Anchor hash on-chain.
+8. Re-read and verify on-chain record.
+
+Main orchestrator:
+
+- `backend.pipeline.FaceChainPipeline`
+
+Run it from Python with your configured env:
+
+```python
+from pathlib import Path
+from backend.pipeline import FaceChainPipeline
+
+pipeline = FaceChainPipeline()
+result = pipeline.run(Path("input.jpg"))
+print(result.status)
+print(result.reason)
+```
+
+## CLI
+
+Run the project from command line:
+
+```bash
+python -m backend.cli run input.jpg --pretty --no-verify
+```
+
+Other commands:
+
+```bash
+python -m backend.cli person1 input.jpg --pretty
+python -m backend.cli verify-evidence --evidence-hash "$EVIDENCE_HASH" --pretty
+```
+
+Flags:
+
+- `run` does full search + validation + blockchain
+- `--no-anchor` stops after evidence generation
+- `--no-verify` anchors only
+- `person1` runs only face processing + search
+- `verify-evidence` reads already anchored evidence from chain
 
 ## Verify existing deployment
 
@@ -76,13 +136,18 @@ Required env:
 - `EVIDENCE_AUTHOR`
 - `EVIDENCE_TIMESTAMP`
 - `EVIDENCE_IMAGE_SHA256`
+- `BASE_SEPOLIA_RPC_URL`
+- `PRIVATE_KEY`
+- `CHAIN_ID`
 
 ## Env
 
 Copy `.env.example` to `.env` and fill:
 
+- `SERPAPI_API_KEY`
 - `BASE_SEPOLIA_RPC_URL`
 - `PRIVATE_KEY`
+- `CHAIN_ID`
 - `ETHERSCAN_API_KEY`
 - `EVIDENCE_REGISTRY`
 - `EVIDENCE_HASH`
@@ -99,3 +164,5 @@ Copy `.env.example` to `.env` and fill:
 
 - The upstream pipeline should canonicalize evidence off-chain, then pass the final `bytes32` hash here.
 - Verification script rebuilds the canonical bytes, hashes them, and checks on-chain anchoring.
+- Privacy stays intact because chain stores no face image, no face embedding, and no raw social post content.
+- Only deterministic proof fields go on-chain.

@@ -1,6 +1,12 @@
 """
-Person 1 Complete Pipeline Orchestrator.
-Flow: Input Image -> Face Processing (Detection/Alignment/Embedding) -> Dual Web Search (Full Image + Face Crop) -> Merged & Deduplicated Candidates
+Pipeline orchestrators.
+
+Person 1 flow:
+Input Image -> Face Processing -> Dual Web Search -> Merged Candidates
+
+FaceChain flow:
+Input Image -> Face Processing -> Dual Web Search -> Validation -> Evidence
+-> Blockchain Anchor -> On-chain Verification
 """
 
 import uuid
@@ -13,6 +19,14 @@ from pydantic import BaseModel, Field
 
 from backend.face import FaceProcessor, FaceDetectionResult, NoFaceDetectedError
 from backend.search import BaseSearchProvider, SerpApiGoogleLensProvider, CandidateResult
+from backend.validation import CandidateValidator, ValidationDecision, CandidateValidationResult
+from backend.evidence import EvidenceBuilder, EvidencePackage
+from backend.blockchain import (
+    AnchorResult,
+    BlockchainError,
+    EvidenceRegistryClient,
+    VerificationResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +50,25 @@ class Person1Result(BaseModel):
     primary_face: FaceDetectionResult = Field(description="Primary face detection & 512-d embedding")
     detected_faces_count: int = Field(description="Total number of faces detected in input image")
     candidates: List[CandidateResult] = Field(description="List of reverse-search candidate results")
+
+
+class FaceChainResult(BaseModel):
+    """
+    Full pipeline output for face search, validation, evidence, and blockchain.
+    """
+
+    input_image_path: str = Field(description="Path to input image file")
+    person1: Person1Result = Field(description="Search-stage output")
+    validation: ValidationDecision = Field(description="Validation-stage output")
+    status: str = Field(description="Pipeline state: rejected, evidence_ready, anchored, verified, failed")
+    reason: str = Field(default="", description="Short status reason")
+    accepted_candidate: Optional[CandidateValidationResult] = Field(
+        default=None,
+        description="Accepted candidate after validation",
+    )
+    evidence: Optional[EvidencePackage] = Field(default=None, description="Deterministic evidence payload")
+    anchor: Optional[AnchorResult] = Field(default=None, description="On-chain anchoring result")
+    verification: Optional[VerificationResult] = Field(default=None, description="On-chain verification result")
 
 
 class Person1Pipeline:
@@ -178,3 +211,126 @@ class Person1Pipeline:
             rank += 1
 
         return final_list
+
+
+class FaceChainPipeline:
+    """
+    End-to-end FaceID pipeline.
+
+    Keeps reverse-search discovery from Person1Pipeline, then adds:
+    - candidate validation
+    - evidence canonicalization and hashing
+    - blockchain anchoring
+    - on-chain verification
+    """
+
+    def __init__(
+        self,
+        person1_pipeline: Optional[Person1Pipeline] = None,
+        validator: Optional[CandidateValidator] = None,
+        evidence_builder: Optional[EvidenceBuilder] = None,
+        blockchain_client: Optional[EvidenceRegistryClient] = None,
+        accept_score_floor: float = 0.85,
+    ):
+        self.person1_pipeline = person1_pipeline or Person1Pipeline()
+        self.validator = validator or CandidateValidator()
+        self.evidence_builder = evidence_builder or EvidenceBuilder()
+        self.blockchain_client = blockchain_client
+        self.accept_score_floor = accept_score_floor
+
+    def run(
+        self,
+        image_path: Union[str, Path],
+        results_per_search: int = 30,
+        max_candidates: int = 50,
+        anchor_on_chain: bool = True,
+        verify_on_chain: bool = True,
+    ) -> FaceChainResult:
+        path = Path(image_path)
+        logger.info("Starting FaceChain pipeline for image: %s", path.name)
+
+        person1_result = self.person1_pipeline.run(
+            path,
+            results_per_search=results_per_search,
+            max_candidates=max_candidates,
+        )
+
+        validation = self.validator.rank_candidates(
+            path,
+            person1_result.primary_face,
+            person1_result.candidates,
+        )
+
+        accepted = validation.accepted or self._accept_by_score_floor(validation)
+        if not accepted:
+            return FaceChainResult(
+                input_image_path=str(path.resolve()),
+                person1=person1_result,
+                validation=validation,
+                status="rejected",
+                reason=validation.reason or "no accepted candidate",
+            )
+
+        evidence = self.evidence_builder.build(
+            accepted.candidate,
+            candidate_image_sha256=accepted.candidate_image_sha256,
+            source_url=accepted.candidate.url,
+        )
+
+        if not anchor_on_chain:
+            return FaceChainResult(
+                input_image_path=str(path.resolve()),
+                person1=person1_result,
+                validation=validation,
+                status="evidence_ready",
+                reason="anchoring skipped",
+                accepted_candidate=accepted,
+                evidence=evidence,
+            )
+
+        client = self.blockchain_client or EvidenceRegistryClient()
+
+        try:
+            anchor = client.anchor_evidence(evidence.evidence_hash, evidence.record.source)
+            verification = client.verify_evidence(
+                evidence.evidence_hash,
+                expected_source=evidence.record.source,
+            ) if verify_on_chain else None
+
+            return FaceChainResult(
+                input_image_path=str(path.resolve()),
+                person1=person1_result,
+                validation=validation,
+                status="verified" if verification else "anchored",
+                reason="anchored and verified" if verification else "anchored",
+                accepted_candidate=accepted,
+                evidence=evidence,
+                anchor=anchor,
+                verification=verification,
+            )
+        except BlockchainError as exc:
+            logger.error("Blockchain stage failed: %s", exc)
+            return FaceChainResult(
+                input_image_path=str(path.resolve()),
+                person1=person1_result,
+                validation=validation,
+                status="failed",
+                reason=str(exc),
+                accepted_candidate=accepted,
+                evidence=evidence,
+            )
+
+    def _accept_by_score_floor(self, validation: ValidationDecision) -> Optional[CandidateValidationResult]:
+        if not validation.ranked:
+            return None
+
+        top = validation.ranked[0]
+        if top.matched and top.overall_score >= self.accept_score_floor:
+            logger.info(
+                "Accepting top candidate by score floor %.3f: overall_score=%.3f margin=%.3f",
+                self.accept_score_floor,
+                top.overall_score,
+                validation.margin,
+            )
+            return top
+        return None

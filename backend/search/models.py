@@ -2,7 +2,7 @@
 Data models for the web/reverse-image-search module.
 """
 
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 from pydantic import BaseModel, Field
 
 
@@ -21,6 +21,10 @@ class CandidateResult(BaseModel):
     discovery_method: str = Field(
         default="full_image", 
         description="Search variant that discovered this candidate: full_image, face_crop, or both"
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Raw provider metadata or normalized candidate metadata",
     )
 
     def to_dict(self) -> Dict[str, Any]:

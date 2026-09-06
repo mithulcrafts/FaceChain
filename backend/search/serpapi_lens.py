@@ -259,6 +259,29 @@ class SerpApiGoogleLensProvider(BaseSearchProvider):
                 snippet=snippet,
                 source=source,
                 search_rank=rank,
+                metadata={
+                    key: match.get(key)
+                    for key in (
+                        "position",
+                        "link",
+                        "url",
+                        "source_web_page",
+                        "source",
+                        "title",
+                        "snippet",
+                        "subtitle",
+                        "description",
+                        "original",
+                        "thumbnail",
+                        "image",
+                        "source_icon",
+                        "author",
+                        "timestamp",
+                        "published_date",
+                        "date",
+                    )
+                    if match.get(key) is not None
+                },
             )
             candidates.append(candidate)
             rank += 1
