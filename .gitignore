@@ -5,3 +5,5 @@ lib/
 .DS_Store
 broadcast/
 ImageTest
+*.jpg
+__pycache__/
