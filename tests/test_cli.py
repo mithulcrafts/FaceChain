@@ -38,6 +38,29 @@ class TestCLI(unittest.TestCase):
         printed = mock_print.call_args[0][0]
         self.assertEqual(json.loads(printed), {"status": "rejected", "reason": "no candidate"})
 
+    @patch("backend.cli.FaceChainPipeline")
+    def test_run_command_prints_human_summary(self, mock_pipeline_cls):
+        mock_pipeline = MagicMock()
+        mock_pipeline.run.return_value = MagicMock(
+            status="verified",
+            reason="anchored and verified",
+            accepted_candidate=None,
+            evidence=None,
+            anchor=None,
+            verification=None,
+        )
+        mock_pipeline_cls.return_value = mock_pipeline
+
+        args = build_parser().parse_args(["run", "input.jpg", "--summary"])
+        with patch("builtins.print") as mock_print:
+            exit_code = cmd_run(args)
+
+        self.assertEqual(exit_code, 0)
+        output = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("FaceID Verification", output)
+        self.assertIn("Status: VERIFIED", output)
+        self.assertIn("anchored and verified", output)
+
     @patch("backend.cli.EvidenceRegistryClient")
     def test_verify_evidence_command_uses_read_only_client(self, mock_client_cls):
         mock_client = MagicMock()

@@ -37,6 +37,44 @@ def _print_payload(payload: Any, pretty: bool) -> None:
         print(json.dumps(data, separators=(",", ":"), ensure_ascii=False, default=_json_default))
 
 
+def _print_run_summary(result: Any) -> None:
+    """Print the small set of facts needed to understand a completed run."""
+    print("FaceID Verification")
+    print(f"Status: {getattr(result, 'status', 'unknown').upper()}")
+    print(f"Reason: {getattr(result, 'reason', '')}")
+
+    accepted = getattr(result, "accepted_candidate", None)
+    if accepted is not None:
+        candidate = accepted.candidate
+        print("\nMatched candidate")
+        print(f"  Title: {candidate.title or '(untitled)'}")
+        print(f"  Source: {candidate.source or '(unknown)'}")
+        print(f"  URL: {candidate.url or '(unavailable)'}")
+        print(f"  Face similarity: {accepted.face_similarity:.3f}")
+        print(f"  Image similarity: {accepted.image_similarity:.3f}")
+        print(f"  Overall score: {accepted.overall_score:.3f}")
+
+    evidence = getattr(result, "evidence", None)
+    if evidence is not None:
+        print("\nEvidence")
+        print(f"  Evidence hash: {evidence.evidence_hash}")
+        print(f"  Image SHA-256: {evidence.candidate_image_sha256}")
+
+    anchor = getattr(result, "anchor", None)
+    if anchor is not None:
+        print("\nBlockchain")
+        print(f"  Transaction: {anchor.transaction_hash}")
+        print(f"  Stored source: {anchor.stored_source}")
+        print(f"  Stored timestamp: {anchor.stored_timestamp}")
+
+    verification = getattr(result, "verification", None)
+    if verification is not None:
+        print("\nOn-chain verification")
+        print(f"  Evidence exists: {'yes' if verification.exists else 'no'}")
+        print(f"  Hash matches: {'yes' if verification.hash_matches else 'no'}")
+        print(f"  Source matches: {'yes' if verification.source_matches else 'no'}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="faceid", description="FaceID Verification CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -58,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--no-anchor", action="store_true", help="Stop after evidence generation")
     run_parser.add_argument("--no-verify", action="store_true", help="Skip on-chain verification after anchor")
+    run_parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print a concise human-readable result instead of the full JSON payload",
+    )
     run_parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     run_parser.set_defaults(func=cmd_run)
 
@@ -89,7 +132,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         anchor_on_chain=not args.no_anchor,
         verify_on_chain=not args.no_verify,
     )
-    _print_payload(result, args.pretty)
+    if args.summary:
+        _print_run_summary(result)
+    else:
+        _print_payload(result, args.pretty)
     return 0
 
 
