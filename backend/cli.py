@@ -59,12 +59,18 @@ def _print_run_summary(result: Any) -> None:
         print("\nEvidence")
         print(f"  Evidence hash: {evidence.evidence_hash}")
         print(f"  Image SHA-256: {evidence.candidate_image_sha256}")
+        if evidence.archive_uri:
+            print(f"  Archive URI: {evidence.archive_uri}")
 
     anchor = getattr(result, "anchor", None)
     if anchor is not None:
         print("\nBlockchain")
         print(f"  Transaction: {anchor.transaction_hash}")
         print(f"  Stored source: {anchor.stored_source}")
+        if anchor.stored_source_url:
+            print(f"  Stored URL: {anchor.stored_source_url}")
+        if anchor.stored_archive_uri:
+            print(f"  Stored archive: {anchor.stored_archive_uri}")
         print(f"  Stored timestamp: {anchor.stored_timestamp}")
 
     verification = getattr(result, "verification", None)
@@ -73,6 +79,7 @@ def _print_run_summary(result: Any) -> None:
         print(f"  Evidence exists: {'yes' if verification.exists else 'no'}")
         print(f"  Hash matches: {'yes' if verification.hash_matches else 'no'}")
         print(f"  Source matches: {'yes' if verification.source_matches else 'no'}")
+        print(f"  Archive reference: {'yes' if verification.archive_matches else 'no'}")
 
 
 def build_parser() -> argparse.ArgumentParser:

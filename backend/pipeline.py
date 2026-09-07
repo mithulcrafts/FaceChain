@@ -21,6 +21,7 @@ from backend.face import FaceProcessor, FaceDetectionResult, NoFaceDetectedError
 from backend.search import BaseSearchProvider, SerpApiGoogleLensProvider, CandidateResult
 from backend.validation import CandidateValidator, ValidationDecision, CandidateValidationResult
 from backend.evidence import EvidenceBuilder, EvidencePackage
+from backend.archive import ArchiveError, ArchivePackage, EvidenceArchiver
 from backend.blockchain import (
     AnchorResult,
     BlockchainError,
@@ -67,6 +68,7 @@ class FaceChainResult(BaseModel):
         description="Accepted candidate after validation",
     )
     evidence: Optional[EvidencePackage] = Field(default=None, description="Deterministic evidence payload")
+    archive: Optional[ArchivePackage] = Field(default=None, description="Archived evidence snapshot")
     anchor: Optional[AnchorResult] = Field(default=None, description="On-chain anchoring result")
     verification: Optional[VerificationResult] = Field(default=None, description="On-chain verification result")
 
@@ -229,6 +231,7 @@ class FaceChainPipeline:
         person1_pipeline: Optional[Person1Pipeline] = None,
         validator: Optional[CandidateValidator] = None,
         evidence_builder: Optional[EvidenceBuilder] = None,
+        evidence_archiver: Optional[EvidenceArchiver] = None,
         blockchain_client: Optional[EvidenceRegistryClient] = None,
         accept_score_floor: Optional[float] = None,
         allow_score_floor_fallback: bool = False,
@@ -236,6 +239,7 @@ class FaceChainPipeline:
         self.person1_pipeline = person1_pipeline or Person1Pipeline()
         self.validator = validator or CandidateValidator()
         self.evidence_builder = evidence_builder or EvidenceBuilder()
+        self.evidence_archiver = evidence_archiver or EvidenceArchiver()
         self.blockchain_client = blockchain_client
         self.accept_score_floor = accept_score_floor
         self.allow_score_floor_fallback = allow_score_floor_fallback
@@ -279,6 +283,21 @@ class FaceChainPipeline:
             source_url=accepted.candidate.url,
         )
 
+        try:
+            archive = self.evidence_archiver.archive(evidence)
+            evidence = evidence.model_copy(update={"archive_uri": archive.uri})
+        except ArchiveError as exc:
+            logger.error("Evidence archival failed: %s", exc)
+            return FaceChainResult(
+                input_image_path=str(path.resolve()),
+                person1=person1_result,
+                validation=validation,
+                status="failed",
+                reason=str(exc),
+                accepted_candidate=accepted,
+                evidence=evidence,
+            )
+
         if not anchor_on_chain:
             return FaceChainResult(
                 input_image_path=str(path.resolve()),
@@ -293,7 +312,12 @@ class FaceChainPipeline:
         client = self.blockchain_client or EvidenceRegistryClient()
 
         try:
-            anchor = client.anchor_evidence(evidence.evidence_hash, evidence.record.source)
+            anchor = client.anchor_evidence(
+                evidence.evidence_hash,
+                evidence.record.source,
+                source_url=evidence.record.source_url,
+                archive_uri=archive.uri,
+            )
             verification = client.verify_evidence(
                 evidence.evidence_hash,
                 expected_source=evidence.record.source,
@@ -307,6 +331,7 @@ class FaceChainPipeline:
                 reason="anchored and verified" if verification else "anchored",
                 accepted_candidate=accepted,
                 evidence=evidence,
+                archive=archive,
                 anchor=anchor,
                 verification=verification,
             )
@@ -320,6 +345,7 @@ class FaceChainPipeline:
                 reason=str(exc),
                 accepted_candidate=accepted,
                 evidence=evidence,
+                archive=archive,
             )
 
     def _accept_by_score_floor(self, validation: ValidationDecision) -> Optional[CandidateValidationResult]:

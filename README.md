@@ -323,9 +323,13 @@ BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
 PRIVATE_KEY=your_wallet_private_key
 CHAIN_ID=84532
 EVIDENCE_REGISTRY=your_deployed_contract_address
+ARCHIVE_DIR=artifacts/archives
+PINATA_JWT=your_pinata_jwt_optional
+IPFS_GATEWAY_URL=https://your-gateway.mypinata.cloud/ipfs
 ```
 
 > **Minimum requirement:** Only `SERPAPI_API_KEY` is needed to run search + validation. Blockchain keys are only needed for on-chain anchoring.
+> `ARCHIVE_DIR` enables local evidence snapshots. `PINATA_JWT` is optional; when configured, candidate metadata and images are pinned to IPFS. Keep archives private or encrypted when the evidence is sensitive.
 
 ### 4. Run the Pipeline
 
@@ -384,10 +388,12 @@ python -m backend.cli verify-evidence --evidence-hash "0xabc123..." --pretty
 | `submitter` | `address` | Wallet that anchored the evidence |
 | `timestamp` | `uint64` | Block timestamp when anchored |
 | `source` | `string` | Normalized source domain (e.g., "twitter.com") |
+| `sourceUrl` | `string` | Original candidate/post URL |
+| `archiveUri` | `string` | Local archive or IPFS URI for recovery |
 
 ### Key Design Choices
 
-- **Hash-only storage.** No images, no text, no personal data on-chain. This keeps gas costs minimal and respects privacy.
+- **Minimal storage.** No images, face embeddings, or raw post content are stored on-chain. The registry stores the evidence hash plus pointers to the original source and an archive, keeping gas costs low while preserving recoverability.
 - **Fail closed.** Empty hashes, empty sources, and duplicate submissions all revert with custom errors. The contract never stores garbage data.
 - **Single event emission.** `EvidenceAnchored` is emitted on every successful anchor, making it trivial to index and monitor from off-chain.
 
@@ -401,6 +407,8 @@ forge script script/DeployEvidenceRegistry.s.sol:DeployEvidenceRegistry \
   --verify
 ```
 
+Archive-aware anchoring requires deploying this updated registry and replacing `EVIDENCE_REGISTRY` with the new address. Existing deployments only support the legacy evidence fields and cannot return an archive URI.
+
 ### Verify On-Chain
 
 ```bash
@@ -409,7 +417,9 @@ cast call <CONTRACT_ADDRESS> "verifyEvidence(bytes32)(bool)" <EVIDENCE_HASH> \
   --rpc-url "$BASE_SEPOLIA_RPC_URL"
 
 # Read full evidence record
-cast call <CONTRACT_ADDRESS> "getEvidence(bytes32)(bool,address,uint64,string)" <EVIDENCE_HASH> \
+cast call <CONTRACT_ADDRESS> \
+  "getEvidenceWithArchive(bytes32)(bool,address,uint64,string,string,string)" \
+  <EVIDENCE_HASH> \
   --rpc-url "$BASE_SEPOLIA_RPC_URL"
 ```
 

@@ -28,12 +28,14 @@ contract VerifyEvidence is ScriptBase {
         EvidenceRegistry registry = EvidenceRegistry(registryAddress);
 
         anchored = registry.verifyEvidence(declaredHash);
-        (bool exists, address submitter, uint64 storedTimestamp, string memory storedSource) =
-            registry.getEvidence(declaredHash);
+        (bool exists, address submitter, uint64 storedTimestamp, string memory storedSource, string memory storedSourceUrl, string memory storedArchiveUri) =
+            registry.getEvidenceWithArchive(declaredHash);
         require(exists, "NO_ANCHOR_FOUND");
         require(submitter != address(0), "NO_SUBMITTER");
         require(storedTimestamp != 0, "NO_TIMESTAMP");
         require(keccak256(bytes(storedSource)) == keccak256(bytes(input.source)), "SOURCE_MISMATCH");
+        require(keccak256(bytes(storedSourceUrl)) == keccak256(bytes(input.sourceUrl)), "SOURCE_URL_MISMATCH");
+        require(bytes(storedArchiveUri).length != 0, "ARCHIVE_MISSING");
 
         emit VerificationResult(declaredHash, anchored, storedTimestamp, storedSource);
         return (declaredHash, anchored, storedTimestamp, storedSource);

@@ -111,6 +111,8 @@ class AnchorResult:
     transaction_hash: str
     stored_timestamp: int
     stored_source: str
+    stored_source_url: str = ""
+    stored_archive_uri: str = ""
 
 
 @dataclass
@@ -123,6 +125,9 @@ class VerificationResult:
     source: str
     source_matches: bool
     hash_matches: bool
+    source_url: str = ""
+    archive_uri: str = ""
+    archive_matches: bool = False
 
 
 class EvidenceRegistryClient:
@@ -147,7 +152,13 @@ class EvidenceRegistryClient:
         if not self.rpc_url:
             raise BlockchainError("BASE_SEPOLIA_RPC_URL is not set")
 
-    def anchor_evidence(self, evidence_hash: str, source: str) -> AnchorResult:
+    def anchor_evidence(
+        self,
+        evidence_hash: str,
+        source: str,
+        source_url: str = "",
+        archive_uri: str = "",
+    ) -> AnchorResult:
         if not self.private_key:
             raise BlockchainError("PRIVATE_KEY is not set")
         tx_hash = ""
@@ -156,9 +167,11 @@ class EvidenceRegistryClient:
                 [
                     "send",
                     self.registry_address,
-                    "anchorEvidence(bytes32,string)(uint64)",
+                    "anchorEvidenceWithArchive(bytes32,string,string,string)(uint64)",
                     evidence_hash,
                     source,
+                    source_url,
+                    archive_uri,
                     "--async",
                 ],
                 rpc_url=self.rpc_url,
@@ -190,8 +203,17 @@ class EvidenceRegistryClient:
         submitter = ""
         timestamp = 0
         stored_source = ""
+        stored_source_url = ""
+        stored_archive_uri = ""
         for attempt in range(5):
-            exists, submitter, timestamp, stored_source = self.get_evidence(evidence_hash)
+            (
+                exists,
+                submitter,
+                timestamp,
+                stored_source,
+                stored_source_url,
+                stored_archive_uri,
+            ) = self.get_evidence_with_archive(evidence_hash)
             if exists:
                 break
             if attempt < 4:
@@ -206,11 +228,13 @@ class EvidenceRegistryClient:
             transaction_hash=tx_hash or "already_anchored",
             stored_timestamp=timestamp,
             stored_source=stored_source,
+            stored_source_url=stored_source_url,
+            stored_archive_uri=stored_archive_uri,
         )
 
     def verify_evidence(self, evidence_hash: str, expected_source: Optional[str] = None) -> VerificationResult:
         anchored = self.verify_anchor(evidence_hash)
-        exists, submitter, timestamp, source = self.get_evidence(evidence_hash)
+        exists, submitter, timestamp, source, source_url, archive_uri = self.get_evidence_with_archive(evidence_hash)
         source_matches = True if expected_source is None else (source == expected_source)
         return VerificationResult(
             evidence_hash=evidence_hash,
@@ -221,6 +245,9 @@ class EvidenceRegistryClient:
             source=source,
             source_matches=source_matches,
             hash_matches=anchored and exists,
+            source_url=source_url,
+            archive_uri=archive_uri,
+            archive_matches=bool(archive_uri),
         )
 
     def verify_anchor(self, evidence_hash: str) -> bool:
@@ -264,4 +291,38 @@ class EvidenceRegistryClient:
             str(submitter),
             int(str(timestamp), 0),
             str(source).strip('"'),
+        )
+
+    def get_evidence_with_archive(self, evidence_hash: str) -> Tuple[bool, str, int, str, str, str]:
+        output = _run_cast(
+            [
+                "call",
+                self.registry_address,
+                "getEvidenceWithArchive(bytes32)(bool,address,uint64,string,string,string)",
+                evidence_hash,
+            ],
+            rpc_url=self.rpc_url,
+            chain_id=self.chain_id,
+        )
+        parts = _parse_tuple(output)
+        if len(parts) == 4:
+            exists, submitter, timestamp, source = parts
+            return (
+                _parse_bool(str(exists)),
+                str(submitter),
+                int(str(timestamp), 0),
+                str(source).strip('"'),
+                "",
+                "",
+            )
+        if len(parts) != 6:
+            raise BlockchainError(f"Could not parse registry archive tuple: {output}")
+        exists, submitter, timestamp, source, source_url, archive_uri = parts
+        return (
+            _parse_bool(str(exists)),
+            str(submitter),
+            int(str(timestamp), 0),
+            str(source).strip('"'),
+            str(source_url).strip('"'),
+            str(archive_uri).strip('"'),
         )

@@ -82,6 +82,8 @@ class EvidencePackage(BaseModel):
     candidate_url: str
     candidate_source: str
     candidate_image_sha256: str
+    candidate_image_url: str = ""
+    archive_uri: Optional[str] = None
 
 
 class EvidenceBuilder:
@@ -121,6 +123,7 @@ class EvidenceBuilder:
             candidate_url=candidate.url,
             candidate_source=record.source,
             candidate_image_sha256=candidate_image_sha256.lower().strip(),
+            candidate_image_url=candidate.image_url or "",
         )
 
     @staticmethod

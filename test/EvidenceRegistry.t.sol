@@ -32,6 +32,25 @@ contract EvidenceRegistryTest {
         require(bytes(source).length == 0, "source should be empty");
     }
 
+    function testAnchorEvidenceWithArchiveStoresRecoveryPointers() public {
+        EvidenceRegistry registry = new EvidenceRegistry();
+        bytes32 evidenceHash = keccak256("archived-facechain-evidence");
+        string memory source = "wikipedia.org";
+        string memory sourceUrl = "https://wikipedia.org/wiki/Example";
+        string memory archiveUri = "ipfs://bafybeievidence";
+
+        registry.anchorEvidenceWithArchive(evidenceHash, source, sourceUrl, archiveUri);
+        (bool exists, address submitter, uint64 timestamp, string memory storedSource, string memory storedUrl, string memory storedArchive) =
+            registry.getEvidenceWithArchive(evidenceHash);
+
+        require(exists, "expected archived evidence");
+        require(submitter == address(this), "unexpected submitter");
+        require(timestamp != 0, "timestamp missing");
+        require(keccak256(bytes(storedSource)) == keccak256(bytes(source)), "source mismatch");
+        require(keccak256(bytes(storedUrl)) == keccak256(bytes(sourceUrl)), "url mismatch");
+        require(keccak256(bytes(storedArchive)) == keccak256(bytes(archiveUri)), "archive mismatch");
+    }
+
     function testDuplicateAnchorReverts() public {
         EvidenceRegistry registry = new EvidenceRegistry();
         bytes32 evidenceHash = keccak256("duplicate");
