@@ -51,8 +51,8 @@ contract EvidenceRegistry {
         if (evidenceHash == bytes32(0)) {
             revert EmptyEvidenceHash();
         }
-        if (bytes(source).length == 0) {
-            revert EmptySource();
+        if (bytes(sourceUrl).length == 0) {
+            revert EmptySourceUrl();
         }
 
         EvidenceRecord storage record = _records[evidenceHash];
@@ -80,10 +80,10 @@ contract EvidenceRegistry {
     function getEvidence(bytes32 evidenceHash)
         external
         view
-        returns (bool exists, address submitter, uint64 timestamp, string memory source)
+        returns (bool exists, address submitter, uint64 timestamp, string memory sourceUrl)
     {
         EvidenceRecord storage record = _records[evidenceHash];
-        return (record.exists, record.submitter, record.timestamp, record.source);
+        return (record.exists, record.submitter, record.timestamp, record.sourceUrl);
     }
 
     function getEvidenceWithArchive(bytes32 evidenceHash)

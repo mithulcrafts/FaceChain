@@ -20,6 +20,13 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.resolve() / '.env'
+    load_dotenv(dotenv_path=env_path)
+except ImportError:
+    pass
+
 # Ensure root workspace directory is in sys.path
 sys.path.insert(0, str(Path(__file__).parent.resolve()))
 

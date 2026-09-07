@@ -132,12 +132,16 @@ class FaceProcessor:
         """
         Fallback face detector using OpenCV Haar Cascade + synthetic 512-d embedding.
         """
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        face_cascade = cv2.CascadeClassifier(cascade_path)
-        
-        rects = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
+        try:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            face_cascade = cv2.CascadeClassifier(cascade_path)
+            
+            rects = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        except AttributeError:
+            # OpenCV 5 removed CascadeClassifier
+            raise RuntimeError("InsightFace is missing/failed, and OpenCV Haar Cascades are unsupported in this version of cv2. Please `pip install insightface`.")
+            
         if len(rects) == 0:
             return []
 

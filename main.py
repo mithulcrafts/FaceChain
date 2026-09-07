@@ -13,13 +13,29 @@ Usage:
 """
 
 import sys
+# Force UTF-8 encoding for Windows terminals to support rich cyberpunk UI
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
+
 import os
 import time
 import json
+import hashlib
 import argparse
 import logging
 from pathlib import Path
 from datetime import datetime
+
+try:
+    from dotenv import load_dotenv
+    # Load from the same directory as this file (the project root)
+    env_path = Path(__file__).parent.resolve() / '.env'
+    load_dotenv(dotenv_path=env_path)
+except ImportError:
+    pass
 
 from rich.console import Console
 from rich.panel import Panel
@@ -114,22 +130,21 @@ def load_env_file():
 
 def print_banner():
     """Print the cyberpunk ASCII banner."""
-    banner_text = """
-╔═══════════════════════════════════════════════════════════════════╗
-║                                                                   ║
-║   ███████╗ █████╗  ██████╗███████╗ ██████╗██╗  ██╗ █████╗ ██╗███╗ ║
-║   ██╔════╝██╔══██╗██╔════╝██╔════╝██╔════╝██║  ██║██╔══██╗██║████║║
-║   █████╗  ███████║██║     █████╗  ██║     ███████║███████║██║██╔█║║
-║   ██╔══╝  ██╔══██║██║     ██╔══╝  ██║     ██╔══██║██╔══██║██║██║║║║
-║   ██║     ██║  ██║╚██████╗███████╗╚██████╗██║  ██║██║  ██║██║██║╚║║
-║   ╚═╝     ╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═║
-║                                                                   ║
-║   L2 Identity Verification Pipeline — HH Goa 2026                ║
-║   Face Scan → Web Discovery → AI Validation → Blockchain Lock    ║
-║                                                                   ║
-╚═══════════════════════════════════════════════════════════════════╝"""
+    ascii_logo = """
+███████╗ █████╗  ██████╗███████╗ ██████╗██╗  ██╗ █████╗ ██╗███╗   ██╗
+██╔════╝██╔══██╗██╔════╝██╔════╝██╔════╝██║  ██║██╔══██╗██║████╗  ██║
+█████╗  ███████║██║     █████╗  ██║     ███████║███████║██║██╔██╗ ██║
+██╔══╝  ██╔══██║██║     ██╔══╝  ██║     ██╔══██║██╔══██║██║██║╚██╗██║
+██║     ██║  ██║╚██████╗███████╗╚██████╗██║  ██║██║  ██║██║██║ ╚████║
+╚═╝     ╚═╝  ╚═╝ ╚═════╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝"""
 
-    console.print(banner_text, style="bright_cyan")
+    title_text = Text.from_markup(
+        f"[bold cyan]{ascii_logo}[/bold cyan]\n\n"
+        "[bold white]L2 Identity Verification Pipeline[/bold white] — [bold cyan]HH Goa 2026[/bold cyan]\n"
+        "[dim]Face Scan → Web Discovery → AI Validation → Blockchain Lock[/dim]",
+        justify="center"
+    )
+    console.print(Panel(title_text, border_style="bright_cyan", padding=(1, 2)))
     console.print()
 
     # System info bar
@@ -142,6 +157,160 @@ def print_banner():
     info_table.add_row("Toolchain", "Foundry (forge + cast)")
     info_table.add_row("Session", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     console.print(Panel(info_table, border_style="bright_black", title="[dim]System Info[/dim]", title_align="left"))
+    console.print()
+
+
+def _compute_input_hash(path: Path) -> str:
+    """Compute SHA-256 of the input image for deduplication."""
+    sha256 = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+def check_existing_evidence(input_image_sha256: str) -> dict | None:
+    """Check if we already have evidence for this exact input image.
+    Prevents duplicate blockchain entries when the same face is scanned twice."""
+    evidence_dir = Path(__file__).parent / "evidence"
+    if not evidence_dir.is_dir():
+        return None
+    for f in evidence_dir.glob("evidence_*.json"):
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if data.get("input_image_sha256") == input_image_sha256:
+                return data
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def auto_verify_evidence(evidence_file_path: str):
+    """Automatically run the tamper detection pipeline after anchoring.
+    This runs the full 4-step verify.py logic inline."""
+    from verify import (
+        read_blockchain_record,
+        download_live_image,
+        rebuild_evidence_hash,
+        compare_hashes,
+    )
+    from backend.blockchain import BlockchainError
+
+    with open(evidence_file_path, "r", encoding="utf-8") as f:
+        evidence_data = json.load(f)
+
+    evidence_hash = evidence_data.get("evidence_hash", "")
+    source_url = evidence_data.get("source_url", "")
+    image_url = source_url  # Use source URL as image URL
+
+    # Try to get a direct image URL from matched candidate
+    mc = evidence_data.get("matched_candidate", {})
+    if mc.get("image_url"):
+        image_url = mc["image_url"]
+    elif mc.get("url"):
+        image_url = mc["url"]
+
+    _stage_header(6, "TAMPER DETECTION", "Re-download → Re-hash → Collision Test")
+
+    # Step 1: Read blockchain
+    _log_info(f"Step 1: Reading blockchain record for hash [dim]{evidence_hash[:20]}...[/dim]")
+    try:
+        record = read_blockchain_record(evidence_hash)
+    except BlockchainError as e:
+        _log_warn(f"Blockchain query failed: {e}")
+        _log_data("Tamper check", "SKIPPED (blockchain unavailable)", "yellow")
+        return
+
+    if not record["exists"]:
+        _log_warn("Evidence not yet confirmed on-chain. Tamper check skipped.")
+        return
+
+    _log_ok("Record found on-chain.")
+    _log_data("Submitter", record["submitter"], "dim")
+    _log_data("Timestamp", str(record["timestamp"]), "dim")
+    console.print()
+
+    # Step 2: Download live image
+    _log_info(f"Step 2: Scraping live web content from [underline]{image_url}[/underline]")
+    t0_v = time.perf_counter()
+    image_bytes, live_image_sha256 = download_live_image(image_url)
+    t1_v = time.perf_counter()
+
+    if image_bytes is None:
+        _log_warn("Source URL is no longer accessible or did not return an image.")
+        console.print(Panel(
+            "[bold yellow]⚠ UNAVAILABLE: Source content cannot be retrieved[/bold yellow]\n\n"
+            "The URL did not return a valid image. This does [bold]NOT[/bold] mean tampering.\n"
+            "Possible reasons: content deleted, server down, CAPTCHA, or blocking.",
+            border_style="yellow",
+            title="[bold yellow]◆ VERDICT: UNAVAILABLE ◆[/bold yellow]",
+            padding=(1, 2),
+        ))
+        return
+
+    _log_ok(f"Downloaded in {t1_v - t0_v:.1f}s ({len(image_bytes):,} bytes)")
+    console.print()
+
+    # Step 3: Re-hash
+    _log_info("Step 3: Rebuilding canonical evidence and computing new SHA-256...")
+    record_data = evidence_data.get("record", {})
+    canonical_json, new_evidence_hash = rebuild_evidence_hash(
+        source_url=source_url,
+        image_sha256=live_image_sha256,
+        title=record_data.get("title", ""),
+        caption=record_data.get("caption", ""),
+        author=record_data.get("author", ""),
+        timestamp=record_data.get("timestamp", ""),
+        source=record_data.get("source", ""),
+    )
+    _log_ok(f"New hash: [dim]{new_evidence_hash}[/dim]")
+    console.print()
+
+    # Step 4: Collision test
+    _log_info("Step 4: Collision test — comparing blockchain hash vs. live hash...")
+    is_pristine = compare_hashes(evidence_hash, new_evidence_hash)
+
+    # Hash comparison table
+    from rich import box as rbox
+    cmp_table = Table(
+        title="[bright_cyan]◆ Hash Comparison ◆[/bright_cyan]",
+        show_lines=True,
+        border_style="bright_black",
+        box=rbox.HEAVY_HEAD,
+        padding=(0, 2),
+    )
+    cmp_table.add_column("Source", style="white", width=25)
+    cmp_table.add_column("SHA-256 Evidence Hash", width=50)
+
+    if is_pristine:
+        cmp_table.add_row("Blockchain (Original)", f"[green]{evidence_hash}[/green]")
+        cmp_table.add_row("Live Web (Current)", f"[green]{new_evidence_hash}[/green]")
+    else:
+        cmp_table.add_row("Blockchain (Original)", f"[green]{evidence_hash}[/green]")
+        cmp_table.add_row("Live Web (Current)", f"[bold red]{new_evidence_hash}  ← CHANGED[/bold red]")
+
+    console.print(cmp_table)
+    console.print()
+
+    if is_pristine:
+        console.print(Panel(
+            "[bold green]✓ VERIFIED: Evidence is PRISTINE[/bold green]\n\n"
+            "The live web content produces the [bold]exact same hash[/bold] as the blockchain.\n"
+            "The source data has [bold]NOT[/bold] been altered since anchoring.",
+            border_style="green",
+            title="[bold green]◆ VERDICT: PRISTINE ◆[/bold green]",
+            padding=(1, 2),
+        ))
+    else:
+        console.print(Panel(
+            "[bold red]✗ TAMPERED: Source evidence has been ALTERED[/bold red]\n\n"
+            "The live web content produces a [bold]DIFFERENT hash[/bold] than the blockchain.\n"
+            "The source data has been modified since the original verification.",
+            border_style="red",
+            title="[bold red]◆ VERDICT: TAMPERED ◆[/bold red]",
+            padding=(1, 2),
+        ))
     console.print()
 
 
@@ -160,6 +329,29 @@ def run_pipeline(image_path: str, anchor: bool = True, verify: bool = True):
     file_size = path.stat().st_size
     _log_data("File size", f"{file_size:,} bytes ({file_size / 1024:.1f} KB)")
     _log_data("Format", path.suffix.upper().replace(".", ""))
+
+    # ─── Deduplication Check ─────────────────────────────────────────────
+    input_image_sha256 = _compute_input_hash(path)
+    _log_data("Input SHA-256", input_image_sha256[:16] + "...", "dim")
+    existing = check_existing_evidence(input_image_sha256)
+    if existing:
+        _log_warn("This exact image was already processed!")
+        _log_data("Existing evidence", existing.get("evidence_hash", "")[:20] + "...", "yellow")
+        _log_data("Matched identity", existing.get("matched_candidate", {}).get("title", "unknown"), "yellow")
+        _log_data("Source", existing.get("source_url", ""), "yellow")
+        console.print(Panel(
+            f"[bold yellow]⚠ DUPLICATE DETECTED[/bold yellow]\n\n"
+            f"This input image has already been processed and anchored.\n\n"
+            f"Evidence Hash: [green]{existing.get('evidence_hash', '')}[/green]\n"
+            f"Source: {existing.get('source_url', '')}\n"
+            f"Processed at: {existing.get('saved_at', 'unknown')}\n\n"
+            f"[dim]To re-process, delete the existing evidence file first:\n"
+            f"  Remove-Item evidence/evidence_{existing.get('evidence_hash', '')[:18]}.json[/dim]",
+            border_style="yellow",
+            title="[yellow]◆ Duplicate Prevention ◆[/yellow]",
+            padding=(1, 3),
+        ))
+        return None
     console.print()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -176,7 +368,10 @@ def run_pipeline(image_path: str, anchor: bool = True, verify: bool = True):
         console=console,
     ) as progress:
         task = progress.add_task("  Initializing face detection engine...", total=100)
-        pipeline = FaceChainPipeline()
+        pipeline = FaceChainPipeline(
+            allow_score_floor_fallback=True,
+            accept_score_floor=0.85,
+        )
         progress.update(task, completed=20, description="  Extracting 512-D ArcFace embedding...")
         result = pipeline.run(
             image_path=path,
@@ -244,7 +439,24 @@ def run_pipeline(image_path: str, anchor: bool = True, verify: bool = True):
         # Margin indicator
         margin_color = "green" if validation.margin >= 0.05 else "yellow" if validation.margin >= 0.02 else "red"
         _log_data("Confidence margin", f"{validation.margin:.4f}", margin_color)
-        _log_data("Decision", validation.reason.upper(), "bright_cyan")
+
+        # Detect score-floor acceptance: validator rejected (ambiguous) but pipeline accepted
+        is_score_floor_accepted = (
+            validation.accepted is None
+            and result.accepted_candidate is not None
+            and result.status != "rejected"
+        )
+
+        if is_score_floor_accepted:
+            _log_data("Decision", "ACCEPTED BY CONSENSUS (SCORE FLOOR)", "bold green")
+            _log_data(
+                "Reason",
+                f"Top candidate scored {result.accepted_candidate.overall_score:.3f} (above floor 0.85) with strong individual match",
+                "dim",
+            )
+        else:
+            decision_color = "green" if validation.accepted else "red"
+            _log_data("Decision", validation.reason.upper(), decision_color)
         console.print()
     else:
         _log_warn("No candidates were ranked.")
@@ -285,7 +497,7 @@ def run_pipeline(image_path: str, anchor: bool = True, verify: bool = True):
 
         _log_ok("Evidence anchored on-chain.")
         _log_data("TX hash", result.anchor.transaction_hash, "green")
-        _log_data("Stored source", result.anchor.stored_source)
+        _log_data("Stored source", result.anchor.stored_source_url)
         _log_data("Block timestamp", str(result.anchor.stored_timestamp))
         console.print()
 
@@ -358,8 +570,18 @@ def run_pipeline(image_path: str, anchor: bool = True, verify: bool = True):
     # ═══════════════════════════════════════════════════════════════════════
     # SAVE EVIDENCE PACKAGE TO DISK
     # ═══════════════════════════════════════════════════════════════════════
+    evidence_filepath = None
     if result.evidence and result.status != "rejected":
-        save_evidence_package(result)
+        evidence_filepath = save_evidence_package(result)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # STAGE 6: AUTO-VERIFY (TAMPER DETECTION)
+    # ═══════════════════════════════════════════════════════════════════════
+    if evidence_filepath and result.anchor:
+        try:
+            auto_verify_evidence(str(evidence_filepath))
+        except Exception as e:
+            _log_warn(f"Auto-verify skipped: {e}")
 
     return result
 
@@ -374,11 +596,16 @@ def save_evidence_package(result: FaceChainResult):
     short_hash = ev.evidence_hash[:18]  # 0x + 16 hex chars
     filename = f"evidence_{short_hash}.json"
 
+    # Compute input image SHA-256 for deduplication
+    input_path = Path(result.input_image_path)
+    input_sha256 = _compute_input_hash(input_path) if input_path.is_file() else ""
+
     package = {
         "evidence_hash": ev.evidence_hash,
         "source_url": ev.candidate_url,
         "source_domain": ev.candidate_source,
         "image_sha256": ev.candidate_image_sha256,
+        "input_image_sha256": input_sha256,
         "candidate_id": ev.candidate_id,
         "canonical_json": ev.canonical_json,
         "record": ev.record.model_dump(),
@@ -393,6 +620,7 @@ def save_evidence_package(result: FaceChainResult):
         package["matched_candidate"] = {
             "title": ac.candidate.title,
             "url": ac.candidate.url,
+            "image_url": ac.candidate.image_url,
             "source": ac.candidate.source,
             "face_similarity": ac.face_similarity,
             "image_similarity": ac.image_similarity,
@@ -402,7 +630,7 @@ def save_evidence_package(result: FaceChainResult):
     if result.anchor:
         package["blockchain"] = {
             "tx_hash": result.anchor.transaction_hash,
-            "stored_source": result.anchor.stored_source,
+            "stored_source": result.anchor.stored_source_url,
             "stored_timestamp": result.anchor.stored_timestamp,
         }
 
@@ -411,8 +639,35 @@ def save_evidence_package(result: FaceChainResult):
         json.dump(package, f, indent=2, ensure_ascii=False)
 
     _log_ok(f"Evidence saved: [underline]evidence/{filename}[/underline]")
-    _log_data("Tip", "Use this file with verify.py: python verify.py --evidence-file evidence/" + filename, "dim")
     console.print()
+
+    # Auto-display evidence package
+    display_table = Table(
+        title="[bright_cyan]◆ Evidence Package ◆[/bright_cyan]",
+        show_lines=False,
+        border_style="bright_black",
+        box=box.SIMPLE_HEAVY,
+        padding=(0, 2),
+    )
+    display_table.add_column("Field", style="bright_cyan", width=20)
+    display_table.add_column("Value", style="white")
+    display_table.add_row("Evidence Hash", f"[green]{package['evidence_hash']}[/green]")
+    display_table.add_row("Source URL", f"[underline]{package['source_url']}[/underline]")
+    display_table.add_row("Source Domain", package.get("source_domain", ""))
+    display_table.add_row("Image SHA-256", f"[dim]{package['image_sha256']}[/dim]")
+    if package.get("matched_candidate"):
+        mc = package["matched_candidate"]
+        display_table.add_row("Matched Title", mc.get("title", ""))
+        display_table.add_row("Face Similarity", f"[green]{mc.get('face_similarity', 0):.3f}[/green]")
+        display_table.add_row("Overall Score", f"[green]{mc.get('overall_score', 0):.3f}[/green]")
+    if package.get("blockchain"):
+        bc = package["blockchain"]
+        display_table.add_row("TX Hash", f"[green]{bc.get('tx_hash', '')}[/green]")
+    display_table.add_row("Saved At", package.get("saved_at", ""))
+    console.print(display_table)
+    console.print()
+
+    return filepath
 
 
 def main():

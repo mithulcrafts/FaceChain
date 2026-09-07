@@ -110,7 +110,7 @@ The easy route would be to call one API, grab the first URL, and dump it into a 
 **We took a fundamentally different approach.** We engineered a multi-layered system built on three principles:
 
 1. **Never trust a single source.** We run *two* independent reverse image searches (full image + cropped face) and merge the results, so we catch matches that a single search would miss.
-2. **Mathematically verify, don't assume.** Search engines make mistakes. Instead of blindly trusting the top Google result, we download every candidate image, extract facial embeddings, and calculate mathematical similarity scores. A candidate only passes if it clears strict thresholds across *four* independent metrics.
+2. **Mathematically verify, don't assume.** Search engines make mistakes. Instead of blindly trusting the top Google result, we download every candidate image, extract facial embeddings, and calculate mathematical similarity scores. A candidate only passes if it clears strict thresholds across *five* independent metrics — including source authority scoring that prioritizes well-known, reputable websites over random blogs.
 3. **Hash the evidence, not just the URL.** A URL can be changed. An image can be swapped. We canonicalize the entire evidence object into a deterministic JSON string and compute its SHA-256 hash *before* anchoring on-chain. If a single character changes tomorrow, verification fails. That is real tamper-proofing.
 
 ---
@@ -141,9 +141,10 @@ The pipeline is split into three decoupled layers, each with a single responsibi
 │  Download Candidates ──► Face Similarity  ──► Image Similarity       │
 │                          (Cosine Distance)    (HSV Histogram)        │
 │                                                                      │
-│  ──► Source Consistency ──► Completeness ──► Weighted Overall Score   │
+│  ──► Source Consistency ──► Source Authority ──► Completeness         │
+│                             (Trusted Domain)                         │
 │                                                                      │
-│  ──► Margin Enforcement ──► Accept / Reject                          │
+│  ──► Weighted Overall Score ──► Margin + Consensus ──► Accept/Reject │
 │                                                                      │
 │  Output: Best verified candidate + SHA-256 of downloaded image       │
 └──────────────────────────────┬───────────────────────────────────────┘
@@ -180,24 +181,35 @@ Two independent searches are fired through **SerpApi Google Lens**:
 Results are **merged and deduplicated** by normalized URL. Candidates found by both searches are flagged as higher confidence.
 
 ### Step 3 — Multi-Factor Candidate Validation
-Each candidate is scored across **four independent metrics**:
+Each candidate is scored across **five independent metrics**:
 
 | Metric | Weight | What it measures |
 |--------|--------|-----------------|
-| **Face Similarity** | 55% | Cosine similarity between 512-D ArcFace embeddings of input vs. candidate |
-| **Image Similarity** | 20% | HSV histogram correlation between the two images |
-| **Source Consistency** | 15% | Whether the candidate's claimed source domain matches the actual URL |
+| **Face Similarity** | 45% | Cosine similarity between 512-D ArcFace embeddings of input vs. candidate |
+| **Source Authority** | 20% | Whether the source is a well-known, reputable domain (Wikipedia, LinkedIn, Instagram, etc.) vs. an unknown blog |
+| **Image Similarity** | 15% | HSV histogram correlation between the two images |
+| **Source Consistency** | 10% | Whether the candidate's claimed source domain matches the actual URL |
 | **Completeness** | 10% | How much metadata the candidate provides (title, snippet, source, URL) |
+
+**Source Authority Scoring** ensures the pipeline prioritizes reliable, well-known websites over random blogs or niche pages. A curated list of **30+ trusted domains** (including Wikipedia, LinkedIn, Twitter/X, Facebook, Instagram, YouTube, IMDB, BBC, CNN, Reuters, Forbes, Amazon, Reddit, and more) receive a `1.0` authority score. Unknown sources with a valid URL receive `0.3`, and candidates with no URL receive `0.0`. This prevents situations where a random real estate blog outranks Wikipedia even though both have equally valid face matches.
 
 A candidate is only accepted if it passes **all three thresholds** (face, image, and overall score) AND beats the runner-up by a minimum **confidence margin** to prevent ambiguous matches.
 
-### Step 4 — Evidence Canonicalization & Hashing
-The accepted candidate's metadata is assembled into an `EvidenceRecord` with a fixed field ordering. This record is serialized to JSON using **deterministic canonicalization** (sorted keys, no whitespace, UTF-8 encoding) and hashed with **SHA-256**.
+**Consensus Acceptance (Score-Floor Fallback):** When searching for well-known public figures, the pipeline often finds 10+ candidates all scoring above 0.90 — but all pointing to the *same person* from different websites. The mathematical margin between rank #1 and rank #2 can be tiny (e.g., 0.001), which would normally trigger an "ambiguous" rejection. To handle this, the pipeline has a **score-floor fallback**: if the top candidate's individual score exceeds `0.85` and it passed all threshold checks, it is accepted as a **consensus match** regardless of the margin. The UI displays this as `ACCEPTED BY CONSENSUS (SCORE FLOOR)` in green — not ambiguity, but overwhelming agreement across multiple independent sources.
 
-This means: same evidence data → same JSON string → same hash. Always. On any machine, in any language.
+### Step 4 — Evidence Canonicalization & Hashing
+The accepted candidate's metadata is assembled into an `EvidenceRecord`. To ensure the hash acts as an undeniable fingerprint of the full post, the hash is computed over the image hash, metadata, AND the URL itself:
+
+**`Evidence Hash = SHA-256( URL + MetaData + Image Hash )`**
+
+This record is serialized to JSON using **deterministic canonicalization** (sorted keys, no whitespace, UTF-8 encoding). This means: same evidence data → same JSON string → same hash. Always. On any machine, in any language.
 
 ### Step 5 — Blockchain Anchoring
-The `bytes32` evidence hash and source string are sent to the `EvidenceRegistry` smart contract on **Base Sepolia** via Foundry's `cast send`. The contract stores the hash, submitter address, timestamp, and source. It emits an `EvidenceAnchored` event and rejects duplicates.
+Now we store the final payload on the blockchain. The payload stored looks exactly like this:
+
+**`Stored Payload = Evidence Hash + sourceUrl`**
+
+The `bytes32` evidence hash and `sourceUrl` string are sent to the `EvidenceRegistry` smart contract on **Base Sepolia** via Foundry's `cast send`. The contract stores the hash, submitter address, timestamp, and full source URL. It emits an `EvidenceAnchored` event and rejects duplicates.
 
 ### Step 6 — On-Chain Verification
 Immediately after anchoring, the pipeline reads the record back from the blockchain using `cast call` and confirms that the stored data matches what was sent. This proves the record is genuinely on-chain and not just assumed from a successful broadcast.
@@ -217,6 +229,16 @@ For high-dimensional vectors like 512-D embeddings, cosine similarity is more ro
 
 ### Why Canonicalization Before Hashing?
 Two JSON strings with identical data but different formatting produce completely different SHA-256 hashes. By enforcing a canonical form (alphabetically sorted keys, no whitespace, UTF-8), we guarantee that the same evidence always produces the same hash — regardless of which machine or language generates it. This is critical for independent verification.
+
+### Why Store the Full URL On-Chain?
+If the blockchain only stored the evidence hash and a domain name (like `twitter.com`), a verifier would *need* our off-chain `evidence.json` file to know *which exact post* to verify. That breaks the trustless nature of the system! By storing the full `sourceUrl` on-chain alongside the hash, the smart contract acts as a completely independent public registry. 
+
+**Example of Public Verifiability:**
+1. You find a suspicious hash on the blockchain: `0xabc123...`
+2. You ask the smart contract: "What is this?" 
+3. The contract returns the full URL: `https://twitter.com/user/post`
+4. You run `python verify.py --evidence-hash 0xabc123...`
+5. The script automatically reads the URL from the blockchain, downloads the live image, and verifies it against the blockchain hash—**without ever needing an `evidence.json` file!**
 
 ### Why Base Sepolia (not Ethereum Mainnet)?
 Base is an Ethereum Layer 2 rollup built on the OP Stack. It inherits Ethereum's security guarantees but with near-zero gas fees and fast block times. For a hackathon demo, this means we can anchor evidence instantly without paying real money, while the architecture is identical to a mainnet deployment.
@@ -238,8 +260,13 @@ This pipeline was built to survive the wild internet and handle complex edge cas
 | **Strict Timeout Enforcement** | Every HTTP request has a 10-20 second timeout. A broken link will never freeze the pipeline. |
 | **Automatic Image Compression** | Images exceeding SerpApi's 500KB upload limit are automatically resized and compressed via PIL before upload. |
 | **Duplicate Anchoring Guard** | The smart contract reverts with `EvidenceAlreadyAnchored` if the same hash is submitted twice. The Python client catches this gracefully and reuses the existing record. |
+| **Input Image Deduplication** | The pipeline computes the SHA-256 hash of the input image before running. If the exact same face image was already processed and anchored, the pipeline halts immediately to save API credits and prevent redundant blockchain entries. |
+| **Automated Tamper Verification** | After anchoring the evidence, the pipeline automatically runs a 4-step inline tamper check (Read Blockchain → Live Scrape → Re-hash → Collision Test) to prove the pipeline's integrity without requiring manual secondary scripts. |
 | **Receipt Polling with Retry** | After broadcasting a transaction, the pipeline polls the RPC node up to 5 times with 1-second delays to confirm the evidence was actually mined. |
 | **Graceful Fallback** | If InsightFace fails to initialize, the face processor falls back to OpenCV's Haar Cascade detector. The pipeline degrades gracefully instead of crashing. |
+| **Source Authority Ranking** | A curated list of 30+ trusted domains (Wikipedia, LinkedIn, Instagram, etc.) ensures reputable sources are ranked higher than random blogs or niche sites — even if both have similar face-match scores. |
+| **Consensus Acceptance** | When multiple candidates all score above 0.85 for the same person (common for public figures), the pipeline accepts the top match as a consensus result instead of falsely rejecting it as ambiguous. |
+| **No Face in Candidate Image** | If a search result image contains no detectable face (e.g., a logo or icon), the validator marks it as `no face detected in candidate image` and skips to the next candidate — the pipeline never halts because one result is invalid. |
 | **Privacy by Design** | No face image, no embedding vector, and no raw social media content is ever stored on-chain. Only the deterministic SHA-256 hash and a source reference go on-chain. |
 
 ---
@@ -337,12 +364,17 @@ IPFS_GATEWAY_URL=https://your-gateway.mypinata.cloud/ipfs
 
 ### 4. Run the Pipeline
 
-There are **two ways** to run the pipeline. Both execute the same underlying `FaceChainPipeline`:
-
-#### Option A: Rich Terminal UI (Recommended for Demo)
+The pipeline uses a **single-command execution** model. When you pass an image to `main.py`, it automatically performs Face Detection, Reverse Image Search, Validation, Canonicalization, Blockchain Anchoring, and Tamper Verification sequentially.
 
 ```bash
-python main.py path/to/face.jpg --no-anchor
+python main.py query_face.jpg
+```
+
+This single command will output the full pipeline trace, including the final Evidence Package and the results of the auto-verification tamper check.
+
+To skip the blockchain anchoring step (for testing):
+```bash
+python main.py query_face.jpg --no-anchor
 ```
 
 This produces a colorful, stage-by-stage terminal output with tables, spinners, and panels — ideal for live demos and screen recordings.
@@ -630,10 +662,11 @@ The system **never overwrites** old records. Each verification is its own immuta
 
 While a generic solution might pipe an image through a search API and blindly dump a URL onto a testnet, **FaceChain** is engineered as a robust, enterprise-grade architecture:
 
-1. **Trust-less Validation:** We do not blindly trust search results. Every candidate is downloaded, embedded using ArcFace (512-D), and mathematically verified against the input face.
-2. **True Tamper-Proofing:** Storing a raw URL on-chain is vulnerable to link rot and content alteration. By canonicalizing and hashing the full evidence payload *before* anchoring, we ensure cryptographic permanence.
-3. **Defensive Engineering:** Our pipeline actively guards against corrupt payloads with strict MIME-type checks, handles timeouts gracefully, prevents duplicate on-chain anchoring, and verifies successful mining via RPC polling.
-4. **Separation of Concerns:** Our three-layer architecture (Discovery, Validation, Blockchain) uses clean, strictly-typed Pydantic schemas, making it modular, scalable, and easy to maintain.
+1. **Trust-less Validation:** We do not blindly trust search results. Every candidate is downloaded, embedded using ArcFace (512-D), and mathematically verified against the input face across five independent metrics.
+2. **Source Authority Intelligence:** The pipeline doesn't just measure facial similarity — it actively prioritizes well-known, authoritative sources (Wikipedia, LinkedIn, Instagram, etc.) over random blogs, ensuring the verified identity comes from a credible web source.
+3. **True Tamper-Proofing:** Storing a raw URL on-chain is vulnerable to link rot and content alteration. By canonicalizing and hashing the full evidence payload *before* anchoring, we ensure cryptographic permanence.
+4. **Defensive Engineering:** Our pipeline actively guards against 12+ edge cases including dead URLs, no-face candidates, oversized images, ambiguous matches, consensus results, duplicate anchoring, and more — with graceful degradation at every layer.
+5. **Separation of Concerns:** Our three-layer architecture (Discovery, Validation, Blockchain) uses clean, strictly-typed Pydantic schemas, making it modular, scalable, and easy to maintain.
 
 ---
 

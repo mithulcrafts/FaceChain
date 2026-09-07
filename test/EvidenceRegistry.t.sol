@@ -7,16 +7,16 @@ contract EvidenceRegistryTest {
     function testAnchorEvidenceStoresRecord() public {
         EvidenceRegistry registry = new EvidenceRegistry();
         bytes32 evidenceHash = keccak256("facechain-evidence");
-        string memory source = "example.com";
+        string memory sourceUrl = "https://example.com/post/123";
 
-        uint64 anchoredAt = registry.anchorEvidence(evidenceHash, source);
-        (bool exists, address submitter, uint64 timestamp, string memory storedSource) =
+        uint64 anchoredAt = registry.anchorEvidence(evidenceHash, sourceUrl);
+        (bool exists, address submitter, uint64 timestamp, string memory storedSourceUrl) =
             registry.getEvidence(evidenceHash);
 
         require(exists, "expected anchored evidence");
         require(submitter == address(this), "unexpected submitter");
         require(timestamp == anchoredAt, "timestamp mismatch");
-        require(keccak256(bytes(storedSource)) == keccak256(bytes(source)), "source mismatch");
+        require(keccak256(bytes(storedSourceUrl)) == keccak256(bytes(sourceUrl)), "sourceUrl mismatch");
         require(registry.verifyEvidence(evidenceHash), "verification failed");
     }
 
@@ -25,11 +25,11 @@ contract EvidenceRegistryTest {
         bytes32 missingHash = keccak256("missing");
 
         require(!registry.verifyEvidence(missingHash), "unexpected anchor");
-        (bool exists, address submitter, uint64 timestamp, string memory source) = registry.getEvidence(missingHash);
+        (bool exists, address submitter, uint64 timestamp, string memory sourceUrl) = registry.getEvidence(missingHash);
         require(!exists, "missing evidence should not exist");
         require(submitter == address(0), "submitter should be zero");
         require(timestamp == 0, "timestamp should be zero");
-        require(bytes(source).length == 0, "source should be empty");
+        require(bytes(sourceUrl).length == 0, "sourceUrl should be empty");
     }
 
     function testAnchorEvidenceWithArchiveStoresRecoveryPointers() public {
@@ -54,12 +54,12 @@ contract EvidenceRegistryTest {
     function testDuplicateAnchorReverts() public {
         EvidenceRegistry registry = new EvidenceRegistry();
         bytes32 evidenceHash = keccak256("duplicate");
-        string memory source = "example.com";
+        string memory sourceUrl = "https://example.com/post/123";
 
-        registry.anchorEvidence(evidenceHash, source);
+        registry.anchorEvidence(evidenceHash, sourceUrl);
 
         (bool success, bytes memory data) =
-            address(registry).call(abi.encodeCall(EvidenceRegistry.anchorEvidence, (evidenceHash, source)));
+            address(registry).call(abi.encodeCall(EvidenceRegistry.anchorEvidence, (evidenceHash, sourceUrl)));
 
         require(!success, "duplicate anchor should revert");
         require(data.length >= 4, "missing revert data");
@@ -71,23 +71,23 @@ contract EvidenceRegistryTest {
 
     function testEmptySourceReverts() public {
         EvidenceRegistry registry = new EvidenceRegistry();
-        bytes32 evidenceHash = keccak256("empty-source");
+        bytes32 evidenceHash = keccak256("empty-sourceUrl");
 
         (bool success, bytes memory data) =
             address(registry).call(abi.encodeCall(EvidenceRegistry.anchorEvidence, (evidenceHash, "")));
 
-        require(!success, "empty source should revert");
+        require(!success, "empty sourceUrl should revert");
         require(data.length >= 4, "missing revert data");
         // forge-lint: disable-next-line(unsafe-typecast)
         bytes4 selector = bytes4(data);
-        require(selector == EvidenceRegistry.EmptySource.selector, "wrong revert selector");
+        require(selector == EvidenceRegistry.EmptySourceUrl.selector, "wrong revert selector");
     }
 
     function testEmptyHashReverts() public {
         EvidenceRegistry registry = new EvidenceRegistry();
 
         (bool success, bytes memory data) =
-            address(registry).call(abi.encodeCall(EvidenceRegistry.anchorEvidence, (bytes32(0), "example.com")));
+            address(registry).call(abi.encodeCall(EvidenceRegistry.anchorEvidence, (bytes32(0), "https://example.com/post/123")));
 
         require(!success, "empty hash should revert");
         require(data.length >= 4, "missing revert data");

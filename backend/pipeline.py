@@ -320,7 +320,7 @@ class FaceChainPipeline:
             )
             verification = client.verify_evidence(
                 evidence.evidence_hash,
-                expected_source=evidence.record.source,
+                expected_source_url=evidence.record.source_url,
             ) if verify_on_chain else None
 
             return FaceChainResult(

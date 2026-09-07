@@ -26,11 +26,21 @@ import hashlib
 import json
 import os
 import sys
+import json
+import argparse
+import subprocess
 import time
-from collections import OrderedDict
-from datetime import datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from datetime import datetime
 from urllib.parse import urlparse
+
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).parent.resolve() / '.env'
+    load_dotenv(dotenv_path=env_path)
+except ImportError:
+    pass
 
 import requests
 
@@ -115,15 +125,15 @@ def _step_header(num, title):
 def read_blockchain_record(evidence_hash: str) -> dict:
     """
     Query the Base Sepolia smart contract and retrieve the original
-    evidence record (exists, submitter, timestamp, source).
+    evidence record (exists, submitter, timestamp, source_url).
     """
     client = EvidenceRegistryClient()
-    exists, submitter, timestamp, source = client.get_evidence(evidence_hash)
+    exists, submitter, timestamp, source_url = client.get_evidence(evidence_hash)
     return {
         "exists": exists,
         "submitter": submitter,
         "timestamp": timestamp,
-        "source": source,
+        "source_url": source_url,
     }
 
 
@@ -158,12 +168,12 @@ def download_live_image(image_url: str) -> tuple[bytes | None, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 def rebuild_evidence_hash(
     source_url: str,
-    source: str,
     image_sha256: str,
     title: str = "",
     caption: str = "",
     author: str = "",
     timestamp: str = "",
+    source: str = "",
 ) -> tuple[str, str]:
     """
     Rebuild the evidence record using the same deterministic canonicalization
@@ -171,9 +181,13 @@ def rebuild_evidence_hash(
 
     Returns (canonical_json_string, evidence_hash_hex).
     """
+    from urllib.parse import urlparse
+    parsed = urlparse(source_url)
+    domain = source or parsed.netloc.lower().replace("www.", "")
+
     record = EvidenceRecord(
         schema_version="1.0",
-        source=source,
+        source=domain,
         source_url=source_url,
         title=title,
         caption=caption,
@@ -280,7 +294,7 @@ Examples:
     if not args.image_url and evidence_data:
         # Try to get the image URL from the matched candidate
         mc = evidence_data.get("matched_candidate", {})
-        args.image_url = mc.get("url", "") or evidence_data.get("source_url", "")
+        args.image_url = mc.get("image_url", "") or mc.get("url", "") or evidence_data.get("source_url", "")
 
     # Auto-discover evidence file by hash if no file was provided
     if not evidence_data and args.evidence_hash:
@@ -291,7 +305,7 @@ Examples:
                 args.source_url = evidence_data.get("source_url", "")
             if not args.image_url:
                 mc = evidence_data.get("matched_candidate", {})
-                args.image_url = mc.get("url", "") or evidence_data.get("source_url", "")
+                args.image_url = mc.get("image_url", "") or mc.get("url", "") or evidence_data.get("source_url", "")
 
     if not args.evidence_hash:
         _log_fail("No evidence hash provided. Use --evidence-hash or --evidence-file.")
@@ -357,7 +371,11 @@ Examples:
     _log_ok("Record found on-chain!")
     _log_data("Submitter", record["submitter"], "dim")
     _log_data("Timestamp", str(record["timestamp"]), "dim")
-    _log_data("Source", record["source"], "bright_cyan")
+    _log_data("Source URL", record["source_url"], "bright_cyan")
+
+    # Fallback to the blockchain's source URL if one wasn't explicitly provided
+    if not args.source_url and record["source_url"]:
+        args.source_url = record["source_url"]
 
     # If --check-only, stop here
     if args.check_only:
@@ -367,7 +385,7 @@ Examples:
                 "[bold green]✓ EVIDENCE EXISTS ON-CHAIN[/bold green]\n\n"
                 f"Hash:       [green]{args.evidence_hash}[/green]\n"
                 f"Submitter:  [dim]{record['submitter']}[/dim]\n"
-                f"Source:     {record['source']}\n"
+                f"Source URL: {record['source_url']}\n"
                 f"Timestamp:  {record['timestamp']}\n\n"
                 "[dim]Use without --check-only to perform a full tamper check.[/dim]",
                 border_style="green",
@@ -420,11 +438,15 @@ Examples:
     _step_header(3, "RE-HASHING EVIDENCE")
     _log_info("Rebuilding canonical evidence record from live data...")
 
-    source_domain = record["source"] or ""
+    record_data = evidence_data.get("record", {})
     canonical_json, new_evidence_hash = rebuild_evidence_hash(
         source_url=args.source_url,
-        source=source_domain,
         image_sha256=live_image_sha256,
+        title=record_data.get("title", ""),
+        caption=record_data.get("caption", ""),
+        author=record_data.get("author", ""),
+        timestamp=record_data.get("timestamp", ""),
+        source=record_data.get("source", ""),
     )
 
     _log_ok("Canonical JSON rebuilt with deterministic serialization.")

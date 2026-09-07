@@ -129,6 +129,18 @@ class ValidationDecision(BaseModel):
     reason: str = Field(default="")
 
 
+# Well-known, authoritative sources that are more likely to have
+# verified information about public figures.
+TRUSTED_DOMAINS = {
+    "wikipedia", "wikimedia", "linkedin", "twitter", "x.com",
+    "facebook", "instagram", "youtube", "imdb", "reddit",
+    "bbc", "cnn", "nytimes", "reuters", "forbes", "bloomberg",
+    "theguardian", "washingtonpost", "apnews", "techcrunch",
+    "github", "medium", "quora", "pinterest", "tiktok",
+    "britannica", "amazon", "ebay", "mubi", "kobo",
+}
+
+
 class CandidateValidator:
     """
     Validate and rank candidates.
@@ -190,12 +202,14 @@ class CandidateValidator:
             candidate_bgr = _read_image(candidate_image_path)
             image_similarity = _image_histogram_similarity(input_bgr, candidate_bgr)
             source_consistency = self._source_consistency(candidate)
+            source_authority = self._source_authority(candidate)
             completeness = self._completeness(candidate)
 
             overall_score = (
-                (face_similarity * 0.55)
-                + (image_similarity * 0.20)
-                + (source_consistency * 0.15)
+                (face_similarity * 0.45)
+                + (image_similarity * 0.15)
+                + (source_consistency * 0.10)
+                + (source_authority * 0.20)
                 + (completeness * 0.10)
             )
 
@@ -306,6 +320,21 @@ class CandidateValidator:
             if source_tokens & (url_tokens | image_tokens):
                 return 0.75
         return 0.25
+
+    def _source_authority(self, candidate: CandidateResult) -> float:
+        """Score based on source reputation. Well-known domains get higher authority."""
+        source_lower = (candidate.source or "").lower()
+        url_lower = (candidate.url or "").lower()
+        combined = source_lower + " " + url_lower
+
+        for domain in TRUSTED_DOMAINS:
+            if domain in combined:
+                return 1.0
+
+        # Unknown source but has a URL - partial credit
+        if candidate.url:
+            return 0.3
+        return 0.0
 
     def _completeness(self, candidate: CandidateResult) -> float:
         score = 0.0

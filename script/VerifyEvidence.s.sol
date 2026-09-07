@@ -6,9 +6,9 @@ import {EvidenceRegistry} from "../src/EvidenceRegistry.sol";
 import {ScriptBase} from "./ScriptBase.sol";
 
 contract VerifyEvidence is ScriptBase {
-    event VerificationResult(bytes32 indexed evidenceHash, bool anchored, uint64 timestamp, string source);
+    event VerificationResult(bytes32 indexed evidenceHash, bool anchored, uint64 timestamp, string sourceUrl);
 
-    function run() external returns (bytes32 evidenceHash, bool anchored, uint64 timestamp, string memory source) {
+    function run() external returns (bytes32 evidenceHash, bool anchored, uint64 timestamp, string memory sourceUrl) {
         EvidenceCanonicalizer.EvidenceInput memory input = EvidenceCanonicalizer.EvidenceInput({
             schemaVersion: vm.envString("EVIDENCE_SCHEMA_VERSION"),
             source: vm.envString("EVIDENCE_SOURCE"),
@@ -37,7 +37,7 @@ contract VerifyEvidence is ScriptBase {
         require(keccak256(bytes(storedSourceUrl)) == keccak256(bytes(input.sourceUrl)), "SOURCE_URL_MISMATCH");
         require(bytes(storedArchiveUri).length != 0, "ARCHIVE_MISSING");
 
-        emit VerificationResult(declaredHash, anchored, storedTimestamp, storedSource);
-        return (declaredHash, anchored, storedTimestamp, storedSource);
+        emit VerificationResult(declaredHash, anchored, storedTimestamp, storedSourceUrl);
+        return (declaredHash, anchored, storedTimestamp, storedSourceUrl);
     }
 }

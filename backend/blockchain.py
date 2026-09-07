@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -90,7 +91,19 @@ def _run_cast(
     private_key: Optional[str] = None,
     include_chain: bool = True,
 ) -> str:
-    cmd = ["cast", *args, "--rpc-url", rpc_url]
+    # Gracefully locate cast even if PATH hasn't refreshed
+    cast_path = shutil.which("cast")
+    if not cast_path:
+        fallback_win = Path.home() / ".foundry" / "bin" / "cast.exe"
+        fallback_nix = Path.home() / ".foundry" / "bin" / "cast"
+        if fallback_win.exists():
+            cast_path = str(fallback_win)
+        elif fallback_nix.exists():
+            cast_path = str(fallback_nix)
+        else:
+            cast_path = "cast"  # default to 'cast' to let standard error bubble up
+
+    cmd = [cast_path, *args, "--rpc-url", rpc_url]
     if include_chain:
         cmd.extend(["--chain", str(chain_id)])
     if private_key:
@@ -122,7 +135,7 @@ class VerificationResult:
     exists: bool
     submitter: str
     timestamp: int
-    source: str
+    source_url: str
     source_matches: bool
     hash_matches: bool
     source_url: str = ""
@@ -193,7 +206,7 @@ class EvidenceRegistryClient:
             if not _receipt_succeeded(receipt):
                 raise BlockchainError(f"Anchor transaction reverted: {tx_hash}")
         except BlockchainError as exc:
-            if "EvidenceAlreadyAnchored" not in str(exc):
+            if "EvidenceAlreadyAnchored" not in str(exc) and "0xd643e710" not in str(exc):
                 raise
             logger.info("Evidence already anchored on-chain; reusing existing record.")
 
@@ -232,7 +245,7 @@ class EvidenceRegistryClient:
             stored_archive_uri=stored_archive_uri,
         )
 
-    def verify_evidence(self, evidence_hash: str, expected_source: Optional[str] = None) -> VerificationResult:
+    def verify_evidence(self, evidence_hash: str, expected_source_url: Optional[str] = None) -> VerificationResult:
         anchored = self.verify_anchor(evidence_hash)
         exists, submitter, timestamp, source, source_url, archive_uri = self.get_evidence_with_archive(evidence_hash)
         source_matches = True if expected_source is None else (source == expected_source)
@@ -242,7 +255,7 @@ class EvidenceRegistryClient:
             exists=exists,
             submitter=submitter,
             timestamp=timestamp,
-            source=source,
+            source_url=source_url,
             source_matches=source_matches,
             hash_matches=anchored and exists,
             source_url=source_url,
@@ -277,12 +290,12 @@ class EvidenceRegistryClient:
 
         parsed = _parse_json_or_text(output)
         if isinstance(parsed, list) and len(parsed) == 4:
-            exists, submitter, timestamp, source = parsed
+            exists, submitter, timestamp, source_url = parsed
         elif isinstance(parsed, str):
             parts = _parse_tuple(parsed)
             if len(parts) != 4:
                 raise BlockchainError(f"Could not parse registry tuple: {output}")
-            exists, submitter, timestamp, source = parts
+            exists, submitter, timestamp, source_url = parts
         else:
             raise BlockchainError(f"Unexpected registry output: {output}")
 
@@ -290,7 +303,7 @@ class EvidenceRegistryClient:
             _parse_bool(str(exists)),
             str(submitter),
             int(str(timestamp), 0),
-            str(source).strip('"'),
+            str(source_url).strip('"'),
         )
 
     def get_evidence_with_archive(self, evidence_hash: str) -> Tuple[bool, str, int, str, str, str]:
