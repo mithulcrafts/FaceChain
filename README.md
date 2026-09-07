@@ -666,16 +666,16 @@ While a generic solution might pipe an image through a search API and blindly du
 2. **Source Authority Intelligence:** The pipeline doesn't just measure facial similarity — it actively prioritizes well-known, authoritative sources (Wikipedia, LinkedIn, Instagram, etc.) over random blogs, ensuring the verified identity comes from a credible web source.
 3. **True Tamper-Proofing:** Storing a raw URL on-chain is vulnerable to link rot and content alteration. By canonicalizing and hashing the full evidence payload *before* anchoring, we ensure cryptographic permanence.
 4. **Defensive Engineering:** Our pipeline actively guards against 12+ edge cases including dead URLs, no-face candidates, oversized images, ambiguous matches, consensus results, duplicate anchoring, and more — with graceful degradation at every layer.
-5. **Separation of Concerns:** Our three-layer architecture (Discovery, Validation, Blockchain) uses clean, strictly-typed Pydantic schemas, making it modular, scalable, and easy to maintain.
+5. **Decentralized Archival (IPFS):** We don't just store a hash; we actively archive the live evidence payload and store the archival URI directly on Base Sepolia. If the original website deletes the image, FaceChain's immutable backup guarantees the identity proof survives forever.
+6. **Separation of Concerns:** Our three-layer architecture (Discovery, Validation, Blockchain) uses clean, strictly-typed Pydantic schemas, making it modular, scalable, and easy to maintain.
 
 ---
 
 ## 🔮 Future Enhancements
 
 1. **Zero-Knowledge Identity Proofs:** Implement zk-SNARKs to prove a face matches an on-chain identity record without revealing the face itself.
-2. **Decentralized Storage:** Anchor the raw image and metadata to IPFS/Arweave and store only the CID on Base Sepolia for a fully decentralized stack.
-3. **Real-time Video Processing:** Expand the pipeline to process video feeds, tracking and verifying multiple identities in real-time.
-4. **Multi-Modal Verification:** Incorporate voice and behavioral biometrics alongside facial recognition for composite identity scores.
+2. **Real-time Video Processing:** Expand the pipeline to process video feeds, tracking and verifying multiple identities in real-time.
+3. **Multi-Modal Verification:** Incorporate voice and behavioral biometrics alongside facial recognition for composite identity scores.
 
 ---
 
