@@ -12,8 +12,81 @@
 
 ---
 
+## What Is This Project? (Start Here)
+
+If you're reading this for the first time, this section will explain everything in simple words.
+
+### The Problem
+
+How do you prove that a person is real?
+
+Think about how a bank verifies your identity today: you walk in, show your face, and hand them your ID card. They match the two and say, *"Yes, this is you."*
+
+Now imagine doing this **entirely online, without any ID card, using only a face photo and the public internet.** That is exactly what FaceChain does.
+
+### The Solution (In Plain English)
+
+FaceChain is an **automated identity verification system for Web3.** Here is the flow in the simplest terms:
+
+1. **You give it a face photo.** This could be a selfie, a webcam capture, or any image with a clear face.
+
+2. **It searches the internet for that face.** The system uses reverse image search (Google Lens) to scour social media, news sites, and public profiles. It finds web pages where this person's face appears — a LinkedIn photo, a Twitter profile picture, an Instagram post, etc.
+
+3. **It mathematically verifies the match.** The system doesn't blindly trust search results. It downloads every candidate image, extracts a 512-dimensional mathematical "fingerprint" of the face (called an ArcFace embedding), and computes how similar the two faces are. Only if the math passes strict thresholds does it accept the match.
+
+4. **It locks the proof onto a blockchain.** Once it finds and verifies a matching web profile, it takes all the metadata (the URL, the title, the image hash, the source) and creates a single SHA-256 fingerprint of that entire evidence package. That fingerprint is permanently written to the Base Sepolia blockchain — where it can never be changed or deleted by anyone.
+
+**The result?** You now have a permanent, tamper-proof, on-chain record that says: *"On this date, at this time, we verified that this face belongs to a real person whose identity is documented at this URL, and the evidence fingerprint is locked on the blockchain."*
+
+### Why Is This Useful?
+
+- **KYC (Know Your Customer) for crypto:** Before opening a high-value wallet or DeFi account, the system can verify the person is real — not a bot, not a deepfake.
+- **Anti-fraud:** If someone claims to be a certain person, the system can verify their face against public web records.
+- **Permanent proof:** Even if the person deletes their social media account tomorrow, the blockchain record proves that the verification happened and what the evidence looked like at the time.
+
+### The Tamper Check (What Are We Actually Verifying?)
+
+This is often confusing for new users, so let's be crystal clear:
+
+> **We are NOT checking if the input face photo is tampered.** We are checking whether the *web evidence* (the social media post we found) has been changed after we locked it into the blockchain.
+
+Here is a real-world example:
+
+**Day 1 — Verification:**
+- You upload a photo of Alice.
+- The system finds Alice's LinkedIn profile. It downloads the profile image, title, URL, and metadata.
+- It hashes all of this into a fingerprint: `0xabc123...`
+- It writes `0xabc123...` to the blockchain. Done.
+
+**Day 30 — Tamper Check (Evidence is Pristine):**
+- Someone wants to verify our work. They go to Alice's LinkedIn URL, download the current image and metadata.
+- They hash it using the same method → they get `0xabc123...`
+- They check the blockchain → it also says `0xabc123...`
+- **The hashes match → ✓ VERIFIED.** The evidence hasn't been touched.
+
+**Day 30 — Tamper Check (Evidence has been Altered):**
+- But what if Alice secretly changed her LinkedIn profile photo between Day 1 and Day 30?
+- When someone re-downloads and re-hashes the page, the new hash is `0xdef999...`
+- They check the blockchain → it still says `0xabc123...`
+- **The hashes DON'T match → ✗ TAMPERED.** The source evidence has been altered since the original verification.
+
+### The TL;DR
+
+| Step | What happens |
+|------|-------------|
+| **INPUT** | A random face photo |
+| **DISCOVER** | Search the web to find the person's public profile |
+| **VERIFY** | Use AI math (512-D embeddings) to guarantee the web face matches the input face |
+| **LOCK** | Hash the evidence and anchor it on the blockchain permanently |
+| **TAMPER CHECK** | Re-download + re-hash the live web post and compare against the blockchain hash |
+
+We use the **web to discover** the identity, and we use the **blockchain to freeze** that discovery in time — so no one can secretly alter the evidence later without us knowing.
+
+---
+
 ## Table of Contents
 
+- [What Is This Project?](#what-is-this-project-start-here)
 - [The Vision](#-the-vision-why-we-built-it-this-way)
 - [System Architecture](#-system-architecture)
 - [How It Works (Step by Step)](#-how-it-works-step-by-step)
