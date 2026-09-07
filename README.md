@@ -1,4 +1,4 @@
-# 👁️ FaceChain — Face to Blockchain Verification Pipeline | HH Goa 2026
+#  FaceChain — Face to Blockchain Verification Pipeline | HH Goa 2026
 
 ![Pipeline Status](https://img.shields.io/badge/Pipeline-Production_Ready-brightgreen)
 ![Network](https://img.shields.io/badge/Network-Base_Sepolia_(L2)-blue)
@@ -28,7 +28,7 @@
 
 ---
 
-## 🚀 The Vision: Why We Built It This Way
+##  The Vision: Why We Built It This Way
 
 The task was straightforward: *take a face, find it online, put it on a blockchain.*
 
@@ -42,7 +42,7 @@ The easy route would be to call one API, grab the first URL, and dump it into a 
 
 ---
 
-## 🧠 System Architecture
+##  System Architecture
 
 The pipeline is split into three decoupled layers, each with a single responsibility:
 
@@ -53,7 +53,7 @@ The pipeline is split into three decoupled layers, each with a single responsibi
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  LAYER 1: DISCOVERY ENGINE (Person 1)                                │
+│  LAYER 1: DISCOVERY ENGINE                               │
 │                                                                      │
 │  Face Detection ──► 512-D Embedding ──► Dual Reverse Image Search    │
 │  (InsightFace)       (ArcFace)          (SerpApi Google Lens)        │
@@ -63,7 +63,7 @@ The pipeline is split into three decoupled layers, each with a single responsibi
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  LAYER 2: AI VALIDATION ENGINE (Person 2)                            │
+│  LAYER 2: AI VALIDATION ENGINE                      │
 │                                                                      │
 │  Download Candidates ──► Face Similarity  ──► Image Similarity       │
 │                          (Cosine Distance)    (HSV Histogram)        │
@@ -77,7 +77,7 @@ The pipeline is split into three decoupled layers, each with a single responsibi
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  LAYER 3: BLOCKCHAIN VAULT (Person 3)                                │
+│  LAYER 3: BLOCKCHAIN VAULT                               │
 │                                                                      │
 │  Canonicalize Evidence ──► SHA-256 Hash ──► Anchor on Base Sepolia   │
 │  (Deterministic JSON)                       (EvidenceRegistry.sol)   │
@@ -92,7 +92,7 @@ Each layer is independently testable, independently deployable, and communicates
 
 ---
 
-## 🔄 How It Works (Step by Step)
+##  How It Works (Step by Step)
 
 Here is exactly what happens when you run the pipeline with a face image:
 
@@ -131,7 +131,7 @@ Immediately after anchoring, the pipeline reads the record back from the blockch
 
 ---
 
-## 🔧 Engineering Decisions & Justifications
+##  Engineering Decisions & Justifications
 
 ### Why InsightFace with ArcFace (not face_recognition / dlib)?
 The commonly used `face_recognition` library produces 128-D embeddings. **InsightFace ArcFace produces 512-D embeddings**, which gives us 4x the feature resolution for distinguishing between similar-looking faces. ArcFace also uses angular margin loss during training, which means it optimizes specifically for *separating* identities — exactly what we need.
@@ -153,7 +153,7 @@ Foundry's `cast` is a battle-tested CLI tool that speaks directly to EVM nodes. 
 
 ---
 
-## 🛡️ Fault-Tolerant Design
+##  Fault-Tolerant Design
 
 This pipeline was built to survive the wild internet:
 
