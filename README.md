@@ -23,7 +23,7 @@
 - [How to Run](#-how-to-run)
 - [Smart Contract](#-smart-contract)
 - [Running the Tests](#-running-the-tests)
-- [Known Limitations](#-known-limitations)
+- [Tamper Detection — How to Verify Evidence](#-tamper-detection--how-to-verify-evidence-verifypy)
 - [Team](#-team)
 
 ---
@@ -175,6 +175,7 @@ This pipeline was built to survive the wild internet:
 FaceID_Verification/
 │
 ├── main.py                          # Rich terminal UI entry point (demo showcase)
+├── verify.py                        # Tamper detection script (re-hash & compare)
 ├── test_search.py                   # Person 1 integration test (mock + live modes)
 │
 ├── backend/
@@ -366,6 +367,150 @@ python test_search.py --mock
 ```bash
 export SERPAPI_API_KEY="your_key"
 python test_search.py path/to/face.jpg
+```
+
+---
+
+## 🔍 Tamper Detection — How to Verify Evidence (`verify.py`)
+
+Once the pipeline has anchored evidence on the blockchain, the natural question is: **"How do I check later if the original social media post was changed or deleted?"**
+
+We built a dedicated script — `verify.py` — that automates this entire tamper-detection process in one command.
+
+### How the Tamper Check Works (Step by Step)
+
+Here is the exact process `verify.py` follows:
+
+#### Step 1 — Read the Blockchain
+The script connects to the Base Sepolia smart contract and asks:
+> *"Hey blockchain, do you have a record for this evidence hash? What was the original SHA-256 fingerprint, the submitter's wallet, the timestamp, and the source domain?"*
+
+If the record exists, the script prints the on-chain data. If it doesn't exist, the script stops immediately and tells you the evidence was never anchored.
+
+#### Step 2 — Scrape the Live Web
+The script goes back to the **exact same URL** on the live internet and **re-downloads the current version** of the image. This is the "live" version — whatever exists on the web *right now*.
+
+It also performs a MIME-type check to make sure the URL still returns an image (not an HTML error page or a CAPTCHA).
+
+#### Step 3 — Re-Hash
+The script takes the freshly downloaded image, computes its SHA-256 hash, rebuilds the evidence record using the **same deterministic canonicalization** that was used during the original pipeline run, and generates a **new evidence hash**.
+
+This is the critical part: the canonicalization is deterministic. Same data → same JSON → same hash. Always.
+
+#### Step 4 — The Collision Test
+The script compares the **new hash** (from the live web) to the **original hash** (from the blockchain):
+
+| Scenario | What it means |
+|----------|---------------|
+| **Hashes match** | The source content is **pristine**. Nothing has been changed since the original verification. |
+| **Hashes differ** | The source content has been **tampered with**. Something changed — even a single pixel or letter is enough to produce a completely different hash. |
+
+### Running the Tamper Check
+
+#### Quick Check: Does the evidence exist on-chain?
+
+This only queries the blockchain — no web scraping:
+
+```bash
+python verify.py --evidence-hash 0xYOUR_HASH_HERE --check-only
+```
+
+**What you'll see:**
+```
+╭─────────────────────────────────────────────╮
+│    FaceChain Tamper Detection               │
+│    Verifying evidence integrity...          │
+╰─────────────────────────────────────────────╯
+
+[Step 1] Reading the blockchain record from Base Sepolia...
+  ✓ Record found on-chain!
+    Submitter : 0xYourWalletAddress
+    Timestamp : 1725667200
+    Source    : twitter.com
+
+  Evidence exists on the blockchain.
+```
+
+#### Full Tamper Check: Re-download + Re-hash + Compare
+
+This goes back to the live web, re-downloads the image, and compares:
+
+```bash
+python verify.py \
+  --evidence-hash 0xYOUR_HASH_HERE \
+  --source-url "https://twitter.com/user/status/123" \
+  --image-url "https://pbs.twimg.com/media/photo.jpg"
+```
+
+**If the evidence is PRISTINE (not tampered):**
+```
+[Step 4] Comparing blockchain hash vs. live web hash...
+
+┌─────────────────────────────────────────────────┐
+│           Hash Comparison                       │
+├──────────────────────┬──────────────────────────┤
+│ Blockchain (Original)│ 0xabc123...              │
+│ Live Web (Current)   │ 0xabc123...              │
+└──────────────────────┴──────────────────────────┘
+
+╭──────────────────────────────────────────────────╮
+│  ✓ VERIFIED: Evidence is PRISTINE.               │
+│                                                  │
+│  The live web content produces the exact same     │
+│  hash as what was anchored on the blockchain.     │
+│  The source data has NOT been altered.            │
+╰──────────────────────────────────────────────────╯
+```
+
+**If the evidence has been TAMPERED WITH:**
+```
+[Step 4] Comparing blockchain hash vs. live web hash...
+
+┌─────────────────────────────────────────────────┐
+│           Hash Comparison                       │
+├──────────────────────┬──────────────────────────┤
+│ Blockchain (Original)│ 0xabc123...              │
+│ Live Web (Current)   │ 0xdef999...   ← CHANGED │
+└──────────────────────┴──────────────────────────┘
+
+╭──────────────────────────────────────────────────╮
+│  ✗ TAMPERED: Source evidence has been ALTERED.   │
+│                                                  │
+│  The live web content produces a DIFFERENT hash   │
+│  than what was originally anchored on the         │
+│  blockchain. The source has been modified.        │
+╰──────────────────────────────────────────────────╯
+```
+
+### Where do I get the evidence hash?
+
+When you run the main pipeline (`python main.py face.jpg` or `python -m backend.cli run face.jpg --summary`), the output includes the evidence hash. It looks like this:
+
+```
+Evidence
+  Evidence hash: 0x7a3b9f...  ← Copy this value
+  Image SHA-256: 4e2c8d...
+```
+
+Save that `Evidence hash` value. That's what you pass to `verify.py --evidence-hash`.
+
+### End-to-End Example: Full Workflow
+
+```bash
+# Step 1: Run the pipeline to find and verify a face
+python main.py my_photo.jpg --no-anchor
+# Output: Evidence hash → 0x7a3b9f...
+
+# Step 2: Anchor on the blockchain (when blockchain keys are configured)
+python -m backend.cli run my_photo.jpg --summary
+# Output: Transaction hash, evidence hash → 0x7a3b9f...
+
+# Step 3: Later (hours, days, or years from now), check for tampering
+python verify.py \
+  --evidence-hash 0x7a3b9f... \
+  --source-url "https://twitter.com/user/post" \
+  --image-url "https://pbs.twimg.com/media/photo.jpg"
+# Output: ✓ VERIFIED or ✗ TAMPERED
 ```
 
 ---
