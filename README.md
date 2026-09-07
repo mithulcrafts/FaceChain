@@ -12,7 +12,7 @@
 
 ---
 
-## What Is This Project? (Start Here)
+## What Is This Project? 
 
 If you're reading this for the first time, this section will explain everything in simple words.
 
@@ -24,7 +24,7 @@ Think about how a bank verifies your identity today: you walk in, show your face
 
 Now imagine doing this **entirely online, without any ID card, using only a face photo and the public internet.** That is exactly what FaceChain does.
 
-### The Solution (In Plain English)
+### The Solution 
 
 FaceChain is an **automated identity verification system for Web3.** Here is the flow in the simplest terms:
 
