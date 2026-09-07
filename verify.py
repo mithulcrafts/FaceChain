@@ -26,18 +26,22 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
+import time
 from collections import OrderedDict
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 
-# ─── Rich terminal output (optional, falls back to plain print) ──────────────
+# ─── Rich terminal output ────────────────────────────────────────────────────
 try:
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
+    from rich.text import Text
+    from rich.rule import Rule
+    from rich import box
 
     console = Console()
     HAS_RICH = True
@@ -53,6 +57,56 @@ except ImportError:
     print("    Make sure you are running this from the project root directory:")
     print("      python verify.py --evidence-hash 0x... --source-url https://...")
     sys.exit(1)
+
+
+# ─── Cyberpunk UI helpers ───────────────────────────────────────────────────
+NEON_CYAN = "bold bright_cyan"
+NEON_GREEN = "bold green"
+NEON_RED = "bold red"
+NEON_YELLOW = "bold yellow"
+DIM = "dim white"
+
+
+def _ts():
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+
+def _log(symbol, message, style=NEON_GREEN):
+    if HAS_RICH:
+        console.print(f"  [{DIM}]{_ts()}[/{DIM}]  [{style}]{symbol}[/{style}]  {message}")
+    else:
+        print(f"  [{_ts()}] {symbol}  {message}")
+
+
+def _log_ok(msg):
+    _log("✓", msg, NEON_GREEN)
+
+
+def _log_info(msg):
+    _log("→", msg, NEON_CYAN)
+
+
+def _log_fail(msg):
+    _log("✗", msg, NEON_RED)
+
+
+def _log_data(label, value, style="green"):
+    if HAS_RICH:
+        console.print(f"  [{DIM}]{_ts()}[/{DIM}]  [{NEON_CYAN}]│[/{NEON_CYAN}]  {label}: [{style}]{value}[/{style}]")
+    else:
+        print(f"  [{_ts()}] │  {label}: {value}")
+
+
+def _step_header(num, title):
+    if HAS_RICH:
+        console.print()
+        header = Text()
+        header.append(f"  ◆ STEP {num} ", style="bold bright_cyan on grey11")
+        header.append(f" {title} ", style="bold white on grey11")
+        console.print(header)
+        console.print()
+    else:
+        print(f"\n  === STEP {num}: {title} ===\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,7 +149,7 @@ def download_live_image(image_url: str) -> tuple[bytes | None, str]:
         image_sha256 = hashlib.sha256(image_bytes).hexdigest()
         return image_bytes, image_sha256
 
-    except requests.exceptions.RequestException as e:
+    except requests.exceptions.RequestException:
         return None, ""
 
 
@@ -140,7 +194,6 @@ def compare_hashes(original_hash: str, new_hash: str) -> bool:
     Compare the hash stored on the blockchain with the newly computed hash.
     Returns True if they match (evidence is pristine).
     """
-    # Normalize both to lowercase with 0x prefix for fair comparison
     original = original_hash.lower().strip()
     new = new_hash.lower().strip()
     if not original.startswith("0x"):
@@ -148,95 +201,6 @@ def compare_hashes(original_hash: str, new_hash: str) -> bool:
     if not new.startswith("0x"):
         new = "0x" + new
     return original == new
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Rich output helpers
-# ─────────────────────────────────────────────────────────────────────────────
-def print_header():
-    if HAS_RICH:
-        console.print(
-            Panel(
-                "[bold cyan]FaceChain Tamper Detection[/bold cyan]\n"
-                "[dim]Verifying evidence integrity against the blockchain[/dim]",
-                border_style="cyan",
-            )
-        )
-    else:
-        print("=" * 60)
-        print("  FaceChain Tamper Detection")
-        print("  Verifying evidence integrity against the blockchain")
-        print("=" * 60)
-
-
-def print_step(number: int, description: str):
-    if HAS_RICH:
-        console.print(f"\n[bold yellow]Step {number}:[/bold yellow] {description}")
-    else:
-        print(f"\n[Step {number}] {description}")
-
-
-def print_result_verified(blockchain_hash: str, live_hash: str):
-    if HAS_RICH:
-        table = Table(title="Hash Comparison", show_header=True)
-        table.add_column("Source", style="cyan")
-        table.add_column("SHA-256 Hash", style="green")
-        table.add_row("Blockchain (Original)", blockchain_hash)
-        table.add_row("Live Web (Current)", live_hash)
-        console.print(table)
-        console.print(
-            Panel(
-                "[bold green]✓ VERIFIED: Evidence is PRISTINE.[/bold green]\n\n"
-                "The live web content produces the exact same hash as what was\n"
-                "anchored on the blockchain. The source data has NOT been altered.",
-                border_style="green",
-            )
-        )
-    else:
-        print(f"\n  Blockchain Hash : {blockchain_hash}")
-        print(f"  Live Web Hash   : {live_hash}")
-        print("\n  [✓] VERIFIED: Evidence is PRISTINE.")
-        print("      The source data has NOT been altered.")
-
-
-def print_result_tampered(blockchain_hash: str, live_hash: str):
-    if HAS_RICH:
-        table = Table(title="Hash Comparison", show_header=True)
-        table.add_column("Source", style="cyan")
-        table.add_column("SHA-256 Hash")
-        table.add_row("Blockchain (Original)", f"[green]{blockchain_hash}[/green]")
-        table.add_row("Live Web (Current)", f"[red]{live_hash}[/red]")
-        console.print(table)
-        console.print(
-            Panel(
-                "[bold red]✗ TAMPERED: Source evidence has been ALTERED.[/bold red]\n\n"
-                "The live web content produces a DIFFERENT hash than what was\n"
-                "originally anchored on the blockchain. The source data has\n"
-                "been modified, deleted, or replaced since the original verification.",
-                border_style="red",
-            )
-        )
-    else:
-        print(f"\n  Blockchain Hash : {blockchain_hash}")
-        print(f"  Live Web Hash   : {live_hash}")
-        print("\n  [✗] TAMPERED: Source evidence has been ALTERED.")
-        print("      The source data has been modified since original verification.")
-
-
-def print_not_found(evidence_hash: str):
-    if HAS_RICH:
-        console.print(
-            Panel(
-                f"[bold red]✗ NOT FOUND: No record exists on-chain for:[/bold red]\n"
-                f"[dim]{evidence_hash}[/dim]\n\n"
-                "This evidence hash was never anchored to the blockchain.\n"
-                "Either the hash is incorrect, or the evidence was never verified.",
-                border_style="red",
-            )
-        )
-    else:
-        print(f"\n  [✗] NOT FOUND: No record on-chain for {evidence_hash}")
-        print("      This evidence was never anchored to the blockchain.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,108 +212,121 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Check if evidence is still pristine (image-only check):
   python verify.py --evidence-hash 0xabc123... --source-url https://twitter.com/user/post --image-url https://pbs.twimg.com/media/photo.jpg
-
-  # Quick blockchain lookup (does the record exist?):
   python verify.py --evidence-hash 0xabc123... --check-only
         """,
     )
-    parser.add_argument(
-        "--evidence-hash",
-        required=True,
-        help="The 0x-prefixed SHA-256 evidence hash that was anchored on-chain.",
-    )
-    parser.add_argument(
-        "--source-url",
-        default="",
-        help="The original source URL of the social media post or web page.",
-    )
-    parser.add_argument(
-        "--image-url",
-        default="",
-        help="The direct URL to the image. If not provided, uses source-url.",
-    )
-    parser.add_argument(
-        "--check-only",
-        action="store_true",
-        help="Only check if the evidence exists on the blockchain (no live web scrape).",
-    )
+    parser.add_argument("--evidence-hash", required=True, help="The 0x-prefixed SHA-256 evidence hash anchored on-chain.")
+    parser.add_argument("--source-url", default="", help="The original source URL of the social media post.")
+    parser.add_argument("--image-url", default="", help="The direct URL to the image.")
+    parser.add_argument("--check-only", action="store_true", help="Only check if the evidence exists on-chain.")
 
     args = parser.parse_args()
 
-    print_header()
+    # ── BANNER ───────────────────────────────────────────────────────────
+    if HAS_RICH:
+        banner = """
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   ████████╗ █████╗ ███╗   ███╗██████╗ ███████╗██████╗       ║
+║   ╚══██╔══╝██╔══██╗████╗ ████║██╔══██╗██╔════╝██╔══██╗      ║
+║      ██║   ███████║██╔████╔██║██████╔╝█████╗  ██████╔╝      ║
+║      ██║   ██╔══██║██║╚██╔╝██║██╔═══╝ ██╔══╝  ██╔══██╗      ║
+║      ██║   ██║  ██║██║ ╚═╝ ██║██║     ███████╗██║  ██║      ║
+║      ╚═╝   ╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝      ║
+║                                                              ║
+║   FaceChain Tamper Detection Engine                          ║
+║   Blockchain Hash ↔ Live Web Comparison                      ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝"""
+        console.print(banner, style="bright_cyan")
+        console.print()
 
-    # ── Step 1: Read the blockchain ──────────────────────────────────────
-    print_step(1, "Reading the blockchain record from Base Sepolia...")
+        info_table = Table(show_header=False, box=None, padding=(0, 2))
+        info_table.add_column(style="dim")
+        info_table.add_column(style="bright_cyan")
+        info_table.add_row("Mode", "Tamper Verification")
+        info_table.add_row("Network", "Base Sepolia (Chain ID: 84532)")
+        info_table.add_row("Session", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        console.print(Panel(info_table, border_style="bright_black", title="[dim]System Info[/dim]", title_align="left"))
+        console.print()
+    else:
+        print("=" * 60)
+        print("  FaceChain Tamper Detection Engine")
+        print("  Blockchain Hash ↔ Live Web Comparison")
+        print("=" * 60)
+
+    # ── STEP 1: Read the blockchain ──────────────────────────────────────
+    _step_header(1, "READING BLOCKCHAIN RECORD")
+    _log_info(f"Querying Base Sepolia for hash: [dim]{args.evidence_hash[:20]}...[/dim]")
 
     try:
         record = read_blockchain_record(args.evidence_hash)
     except BlockchainError as e:
-        if HAS_RICH:
-            console.print(f"[red]Error connecting to blockchain: {e}[/red]")
-        else:
-            print(f"  ERROR: Could not connect to blockchain: {e}")
+        _log_fail(f"Blockchain connection failed: {e}")
         sys.exit(1)
 
     if not record["exists"]:
-        print_not_found(args.evidence_hash)
+        _log_fail("No record found on-chain for this evidence hash.")
+        if HAS_RICH:
+            console.print(Panel(
+                f"[bold red]✗ NOT FOUND[/bold red]\n\n"
+                f"Evidence hash: [dim]{args.evidence_hash}[/dim]\n\n"
+                f"[dim]This hash was never anchored to the blockchain.\n"
+                f"Either the hash is incorrect or the evidence was never verified.[/dim]",
+                border_style="red",
+                title="[red]◆ Result ◆[/red]",
+                padding=(1, 3),
+            ))
         sys.exit(1)
 
-    if HAS_RICH:
-        console.print(f"  [green]✓[/green] Record found on-chain!")
-        console.print(f"    Submitter : [dim]{record['submitter']}[/dim]")
-        console.print(f"    Timestamp : [dim]{record['timestamp']}[/dim]")
-        console.print(f"    Source    : [dim]{record['source']}[/dim]")
-    else:
-        print(f"  ✓ Record found on-chain!")
-        print(f"    Submitter : {record['submitter']}")
-        print(f"    Timestamp : {record['timestamp']}")
-        print(f"    Source    : {record['source']}")
+    _log_ok("Record found on-chain!")
+    _log_data("Submitter", record["submitter"], "dim")
+    _log_data("Timestamp", str(record["timestamp"]), "dim")
+    _log_data("Source", record["source"], "bright_cyan")
 
     # If --check-only, stop here
     if args.check_only:
         if HAS_RICH:
-            console.print(
-                Panel(
-                    "[green]Evidence exists on the blockchain.[/green]\n"
-                    "Use without --check-only to perform a full tamper check.",
-                    border_style="green",
-                )
-            )
-        else:
-            print("\n  Evidence exists on the blockchain.")
-            print("  Use without --check-only to perform a full tamper check.")
+            console.print()
+            console.print(Panel(
+                "[bold green]✓ EVIDENCE EXISTS ON-CHAIN[/bold green]\n\n"
+                f"Hash:       [green]{args.evidence_hash}[/green]\n"
+                f"Submitter:  [dim]{record['submitter']}[/dim]\n"
+                f"Source:     {record['source']}\n"
+                f"Timestamp:  {record['timestamp']}\n\n"
+                "[dim]Use without --check-only to perform a full tamper check.[/dim]",
+                border_style="green",
+                title="[green]◆ Result ◆[/green]",
+                padding=(1, 3),
+            ))
         sys.exit(0)
 
-    # ── Step 2: Download the live image from the web ─────────────────────
+    # ── STEP 2: Download the live image ──────────────────────────────────
     image_url = args.image_url or args.source_url
     if not image_url:
-        if HAS_RICH:
-            console.print("[red]Error: Provide --source-url or --image-url for live tamper check.[/red]")
-        else:
-            print("  ERROR: Provide --source-url or --image-url for live tamper check.")
+        _log_fail("No URL provided. Use --source-url or --image-url for live tamper check.")
         sys.exit(1)
 
-    print_step(2, f"Downloading the CURRENT image from the live web...\n         URL: {image_url}")
+    _step_header(2, "SCRAPING LIVE WEB")
+    _log_info(f"Downloading current image from:")
+    _log_data("URL", f"[underline]{image_url}[/underline]", "bright_cyan")
 
+    t0 = time.perf_counter()
     image_bytes, live_image_sha256 = download_live_image(image_url)
+    t1 = time.perf_counter()
+
     if image_bytes is None:
-        if HAS_RICH:
-            console.print("[red]  ✗ Failed to download live image. The URL may be broken or blocked.[/red]")
-        else:
-            print("  ✗ Failed to download live image. The URL may be broken or blocked.")
+        _log_fail("Failed to download live image. URL may be broken, blocked, or returning non-image content.")
         sys.exit(1)
 
-    if HAS_RICH:
-        console.print(f"  [green]✓[/green] Downloaded {len(image_bytes):,} bytes")
-        console.print(f"    Live image SHA-256: [dim]{live_image_sha256}[/dim]")
-    else:
-        print(f"  ✓ Downloaded {len(image_bytes):,} bytes")
-        print(f"    Live image SHA-256: {live_image_sha256}")
+    _log_ok(f"Downloaded in [bold]{t1 - t0:.1f}s[/bold]")
+    _log_data("Payload size", f"{len(image_bytes):,} bytes ({len(image_bytes) / 1024:.1f} KB)")
+    _log_data("Live image SHA-256", live_image_sha256, "dim")
 
-    # ── Step 3: Re-build the evidence and re-hash it ─────────────────────
-    print_step(3, "Re-building evidence record and computing fresh SHA-256 hash...")
+    # ── STEP 3: Re-hash ──────────────────────────────────────────────────
+    _step_header(3, "RE-HASHING EVIDENCE")
+    _log_info("Rebuilding canonical evidence record from live data...")
 
     source_domain = record["source"] or ""
     canonical_json, new_evidence_hash = rebuild_evidence_hash(
@@ -358,24 +335,74 @@ Examples:
         image_sha256=live_image_sha256,
     )
 
-    if HAS_RICH:
-        console.print(f"  [green]✓[/green] Canonical JSON rebuilt")
-        console.print(f"    New evidence hash: [dim]{new_evidence_hash}[/dim]")
-    else:
-        print(f"  ✓ Canonical JSON rebuilt")
-        print(f"    New evidence hash: {new_evidence_hash}")
+    _log_ok("Canonical JSON rebuilt with deterministic serialization.")
+    _log_data("New evidence hash", new_evidence_hash, "bright_cyan")
 
-    # ── Step 4: The Collision Test ───────────────────────────────────────
-    print_step(4, "Comparing blockchain hash vs. live web hash...")
+    # ── STEP 4: The Collision Test ───────────────────────────────────────
+    _step_header(4, "COLLISION TEST")
+    _log_info("Comparing blockchain hash vs. live web hash...")
 
     is_pristine = compare_hashes(args.evidence_hash, new_evidence_hash)
 
-    if is_pristine:
-        print_result_verified(args.evidence_hash, new_evidence_hash)
-        sys.exit(0)
+    if HAS_RICH:
+        console.print()
+
+        # Hash comparison table
+        cmp_table = Table(
+            title="[bright_cyan]◆ Hash Comparison ◆[/bright_cyan]",
+            show_lines=True,
+            border_style="bright_black",
+            box=box.HEAVY_HEAD,
+            padding=(0, 2),
+        )
+        cmp_table.add_column("Source", style="white", width=25)
+        cmp_table.add_column("SHA-256 Evidence Hash", width=50)
+
+        if is_pristine:
+            cmp_table.add_row("Blockchain (Original)", f"[green]{args.evidence_hash}[/green]")
+            cmp_table.add_row("Live Web (Current)", f"[green]{new_evidence_hash}[/green]")
+        else:
+            cmp_table.add_row("Blockchain (Original)", f"[green]{args.evidence_hash}[/green]")
+            cmp_table.add_row("Live Web (Current)", f"[bold red]{new_evidence_hash}  ← CHANGED[/bold red]")
+
+        console.print(cmp_table)
+        console.print()
+
+        # Final verdict
+        if is_pristine:
+            console.print(Panel(
+                "[bold green]✓ VERIFIED: Evidence is PRISTINE[/bold green]\n\n"
+                "The live web content produces the [bold]exact same hash[/bold] as what was\n"
+                "anchored on the blockchain. The source data has [bold]NOT[/bold] been altered.\n\n"
+                f"[dim]Hash: {args.evidence_hash}\n"
+                f"Verified at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]",
+                border_style="green",
+                title="[bold green]◆ VERDICT: PRISTINE ◆[/bold green]",
+                padding=(1, 3),
+            ))
+        else:
+            console.print(Panel(
+                "[bold red]✗ TAMPERED: Source evidence has been ALTERED[/bold red]\n\n"
+                "The live web content produces a [bold]DIFFERENT hash[/bold] than what was\n"
+                "originally anchored on the blockchain. The source data has been\n"
+                "modified, deleted, or replaced since the original verification.\n\n"
+                f"[dim]Original hash: {args.evidence_hash}\n"
+                f"Current hash:  {new_evidence_hash}\n"
+                f"Checked at:    {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]",
+                border_style="red",
+                title="[bold red]◆ VERDICT: TAMPERED ◆[/bold red]",
+                padding=(1, 3),
+            ))
     else:
-        print_result_tampered(args.evidence_hash, new_evidence_hash)
-        sys.exit(2)
+        print(f"\n  Blockchain Hash : {args.evidence_hash}")
+        print(f"  Live Web Hash   : {new_evidence_hash}")
+        if is_pristine:
+            print("\n  [✓] VERIFIED: Evidence is PRISTINE.")
+        else:
+            print("\n  [✗] TAMPERED: Source evidence has been ALTERED.")
+
+    console.print() if HAS_RICH else print()
+    sys.exit(0 if is_pristine else 2)
 
 
 if __name__ == "__main__":

@@ -444,7 +444,7 @@ python test_search.py path/to/face.jpg
 
 ---
 
-## 🔍 Tamper Detection — How to Verify Evidence (`verify.py`)
+## Tamper Detection — How to Verify Evidence (`verify.py`)
 
 Once the pipeline has anchored evidence on the blockchain, the natural question is: **"How do I check later if the original social media post was changed or deleted?"**
 
