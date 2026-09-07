@@ -1,128 +1,215 @@
-import time
+"""
+HH GOA 2026: L2 Identity Verification Pipeline
+Master orchestrator that ties together:
+  - Person 1: Face detection + reverse image search (SerpApi Google Lens)
+  - Person 2: Candidate validation (face similarity, image similarity, scoring)
+  - Person 3: Evidence canonicalization + blockchain anchoring (Base Sepolia)
+
+Usage:
+  python main.py <path_to_face_image>
+  python main.py query_face.jpg
+  python main.py query_face.jpg --no-anchor      # skip blockchain
+  python main.py query_face.jpg --summary         # concise output
+"""
+
+import sys
 import os
+import time
+import argparse
+import logging
+from pathlib import Path
+
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-# Import your custom AI and Cryptography modules
-from backend.validation import get_face_encoding, download_candidate_image, verify_candidate_match
-from backend.evidence import canonicalize_and_hash
+# Ensure project root is on path
+sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
+from backend.pipeline import FaceChainPipeline, FaceChainResult, Person1Pipeline
+from backend.face import NoFaceDetectedError
+from backend.search import ConfigurationError, SearchError
+
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s")
 console = Console()
 
-def run_pipeline(query_image_path, candidate_list):
-    console.print(Panel.fit("[bold cyan]HH GOA 2026: L2 Identity Verification Pipeline[/bold cyan]", border_style="cyan"))
-    
-    # --- STAGE 1: EXTRACT QUERY FINGERPRINT ---
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Extracting biometric fingerprint from input...", total=None)
-        query_encoding = get_face_encoding(query_image_path)
-        
-    if query_encoding is None:
-        console.print("[bold red]CRITICAL HALT: No face detected in input image.[/bold red]")
-        return
-    console.print("[bold green][OK] Input biometric fingerprint secured.[/bold green]")
 
-    # --- STAGE 2: CANDIDATE VALIDATION LOOP ---
-    best_candidate = None
-    highest_confidence = 0.0
-    second_highest = 0.0
-    
-    console.print("\n[*] Initializing Candidate Validation Engine...")
-    
-    # TODO: Create a loop that iterates over the 'candidate_list'
-    for index, candidate in enumerate(candidate_list):
-        # 1. Download the candidate's image to a temporary file (e.g., f"temp_candidate_{index}.jpg")
-        temp_candidate_path = f"temp_candidate_{index}.jpg"
-        console.print(f"[*] Processing candidate {index + 1}/{len(candidate_list)}: {candidate['title']}")
-        
-        success = download_candidate_image(candidate["image_url"], temp_candidate_path)
-        
-        if success:
-            # 2. If download is successful, run 'verify_candidate_match' against 'query_encoding'
-            result = verify_candidate_match(query_encoding, temp_candidate_path)
-            confidence = result.get("confidence", 0.0)
-            
-            console.print(f"[+] Match confidence for {candidate['title']}: {confidence}%")
-            
-            # 3. If the 'confidence' is higher than 'highest_confidence', update 'second_highest', 'highest_confidence', and 'best_candidate'.
-            if confidence > highest_confidence:
-                second_highest = highest_confidence
-                highest_confidence = confidence
-                best_candidate = candidate
-            elif confidence > second_highest:
-                second_highest = confidence
-                
-            # Clean up the temporary file if desired, or leave it for debugging
-            try:
-                os.remove(temp_candidate_path)
-            except OSError:
-                pass
-        
-    # --- STAGE 3: CONFIDENCE MARGIN ENFORCEMENT ---
-    # We require the top match to be at least 5% more confident than the runner up to avoid ambiguity
-    margin = highest_confidence - second_highest
-    
-    if best_candidate is None or highest_confidence < 50.0:
-        console.print("[bold red]CRITICAL HALT: No high-confidence matches found.[/bold red]")
+def load_env_file():
+    """Load backend/.env into os.environ if it exists."""
+    env_path = Path(__file__).parent / "backend" / ".env"
+    if not env_path.exists():
         return
-        
-    if margin < 5.0:
-        console.print(f"[bold red]CRITICAL HALT: Ambiguous match detected. Margin too low ({margin}%).[/bold red]")
-        return
-        
-    console.print(f"[bold green][OK] Identity Match Locked. Confidence: {highest_confidence}% (Margin: {margin}%)[/bold green]")
-    time.sleep(1)
+    with open(env_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value:
+                os.environ.setdefault(key, value)
 
-    # --- STAGE 4: CANONICALIZATION & EXPORT ---
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        progress.add_task(description="Generating SHA-256 Evidence Fingerprint...", total=None)
-        
-        # Prepare the exact data structure Teammate 3 requested
-        evidence_payload = {
-            "url": best_candidate["url"],
-            "image_url": best_candidate["image_url"],
-            "title": best_candidate["title"],
-            "source": best_candidate["source"],
-            "published_at": str(int(time.time())) # Current timestamp
-        }
-        
-        # Call your 'canonicalize_and_hash' function on the 'evidence_payload'
-        evidence_hash = canonicalize_and_hash(evidence_payload)
-        
-    # FINAL OUTPUT - Handoff to Blockchain Layer
-    console.print(Panel(
-        f"[bold white]EVIDENCE PACKAGED FOR BASE SEPOLIA[/bold white]\n\n"
-        f"Match URL: [underline]{evidence_payload['url']}[/underline]\n"
-        f"SHA-256 Hash: [green]{evidence_hash}[/green]\n\n"
-        f"To anchor on-chain, export these environment variables for Foundry:\n"
-        f"export EVIDENCE_HASH={evidence_hash}\n"
-        f"export EVIDENCE_SOURCE_URL={evidence_payload['url']}\n",
-        title="[bold green]Pipeline Orchestration Complete[/bold green]",
-        border_style="green"
+
+def run_pipeline(image_path: str, anchor: bool = True, verify: bool = True):
+    """Execute the full FaceChain pipeline with rich terminal UI."""
+
+    console.print(Panel.fit(
+        "[bold cyan]HH GOA 2026: L2 Identity Verification Pipeline[/bold cyan]\n"
+        "[dim]Face Search -> AI Validation -> Evidence Hash -> Base Sepolia[/dim]",
+        border_style="cyan"
     ))
 
+    path = Path(image_path)
+    if not path.is_file():
+        console.print(f"[bold red]CRITICAL HALT: Image file not found: {path}[/bold red]")
+        return None
+
+    console.print(f"[*] Input image: [underline]{path.resolve()}[/underline]\n")
+
+    # --- STAGE 1: PERSON 1 - FACE DETECTION + REVERSE SEARCH ---
+    console.print("[bold yellow]-- STAGE 1: Face Detection + Reverse Image Search --[/bold yellow]")
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+        progress.add_task(description="Detecting face and running dual web search via SerpApi...", total=None)
+        pipeline = FaceChainPipeline()
+        result = pipeline.run(
+            image_path=path,
+            results_per_search=30,
+            max_candidates=50,
+            anchor_on_chain=anchor,
+            verify_on_chain=verify,
+        )
+
+    person1 = result.person1
+    console.print(f"[bold green][OK] Face detected.[/bold green] Score: {person1.primary_face.det_score:.2f}, "
+                  f"Embedding: {len(person1.primary_face.embedding)}-D")
+    console.print(f"[bold green][OK] Reverse search complete.[/bold green] "
+                  f"Found {len(person1.candidates)} candidate(s)\n")
+
+    # --- STAGE 2: PERSON 2 - CANDIDATE VALIDATION ---
+    console.print("[bold yellow]-- STAGE 2: AI Candidate Validation --[/bold yellow]")
+    validation = result.validation
+
+    if validation.ranked:
+        table = Table(title="Candidate Ranking", show_lines=True)
+        table.add_column("Rank", style="cyan", justify="center")
+        table.add_column("Title", style="white")
+        table.add_column("Source", style="dim")
+        table.add_column("Face Sim", justify="center")
+        table.add_column("Image Sim", justify="center")
+        table.add_column("Overall", justify="center", style="bold")
+        table.add_column("Matched", justify="center")
+
+        for i, candidate_result in enumerate(validation.ranked[:10], 1):
+            matched_str = "[green]YES[/green]" if candidate_result.matched else "[red]NO[/red]"
+            table.add_row(
+                str(i),
+                (candidate_result.candidate.title or "(untitled)")[:40],
+                (candidate_result.candidate.source or "?")[:20],
+                f"{candidate_result.face_similarity:.3f}",
+                f"{candidate_result.image_similarity:.3f}",
+                f"{candidate_result.overall_score:.3f}",
+                matched_str,
+            )
+        console.print(table)
+        console.print(f"Margin: {validation.margin:.3f} | Decision: {validation.reason}\n")
+    else:
+        console.print("[dim]No candidates were ranked.[/dim]\n")
+
+    # --- STAGE 3: EVIDENCE + BLOCKCHAIN ---
+    if result.status == "rejected":
+        console.print(f"[bold red]PIPELINE HALTED: {result.reason}[/bold red]")
+        return result
+
+    if result.evidence:
+        console.print("[bold yellow]-- STAGE 3: Evidence Canonicalization --[/bold yellow]")
+        ev = result.evidence
+        console.print(f"  Evidence Hash:  [green]{ev.evidence_hash}[/green]")
+        console.print(f"  Image SHA-256:  {ev.candidate_image_sha256}")
+        console.print(f"  Source URL:     [underline]{ev.candidate_url}[/underline]")
+        console.print(f"  Source:         {ev.candidate_source}\n")
+
+    if result.anchor:
+        console.print("[bold yellow]-- STAGE 4: Blockchain Anchor (Base Sepolia) --[/bold yellow]")
+        console.print(f"  TX Hash:        [green]{result.anchor.transaction_hash}[/green]")
+        console.print(f"  Stored Source:  {result.anchor.stored_source}")
+        console.print(f"  Timestamp:      {result.anchor.stored_timestamp}\n")
+
+    if result.verification:
+        console.print("[bold yellow]-- STAGE 5: On-Chain Verification --[/bold yellow]")
+        v = result.verification
+        exists_str = "[green]YES[/green]" if v.exists else "[red]NO[/red]"
+        hash_str = "[green]YES[/green]" if v.hash_matches else "[red]NO[/red]"
+        source_str = "[green]YES[/green]" if v.source_matches else "[red]NO[/red]"
+        console.print(f"  Evidence Exists: {exists_str}")
+        console.print(f"  Hash Matches:    {hash_str}")
+        console.print(f"  Source Matches:  {source_str}\n")
+
+    # --- FINAL STATUS PANEL ---
+    status_color = "green" if result.status in ("verified", "anchored", "evidence_ready") else "red"
+    panel_content = (
+        f"[bold white]STATUS: {result.status.upper()}[/bold white]\n"
+        f"Reason: {result.reason}\n"
+    )
+    if result.evidence:
+        panel_content += f"\nSHA-256 Evidence Hash:\n[green]{result.evidence.evidence_hash}[/green]\n"
+    if result.accepted_candidate:
+        ac = result.accepted_candidate
+        panel_content += (
+            f"\nMatched: {ac.candidate.title or '(untitled)'}\n"
+            f"URL: [underline]{ac.candidate.url}[/underline]\n"
+            f"Overall Score: {ac.overall_score:.3f}\n"
+        )
+
+    console.print(Panel(panel_content, title="[bold]Pipeline Result[/bold]", border_style=status_color))
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="HH GOA 2026: L2 Identity Verification Pipeline"
+    )
+    parser.add_argument("image_path", type=str, help="Path to the input face image")
+    parser.add_argument("--no-anchor", action="store_true",
+                        help="Skip blockchain anchoring (stop after evidence generation)")
+    parser.add_argument("--no-verify", action="store_true",
+                        help="Skip on-chain verification after anchoring")
+
+    args = parser.parse_args()
+
+    # Load .env file for API keys and blockchain config
+    load_env_file()
+
+    # Check critical environment variables
+    if not os.getenv("SERPAPI_API_KEY"):
+        console.print("[bold red]ERROR: SERPAPI_API_KEY not set.[/bold red]")
+        console.print("Set it in backend/.env or as an environment variable.")
+        sys.exit(1)
+
+    anchor = not args.no_anchor
+    verify = not args.no_verify
+
+    if anchor and not os.getenv("EVIDENCE_REGISTRY"):
+        console.print("[bold yellow]WARNING: EVIDENCE_REGISTRY not set. "
+                      "Blockchain anchoring will fail. Use --no-anchor to skip.[/bold yellow]\n")
+
+    try:
+        run_pipeline(args.image_path, anchor=anchor, verify=verify)
+    except NoFaceDetectedError as e:
+        console.print(f"[bold red]No face detected: {e}[/bold red]")
+        sys.exit(1)
+    except ConfigurationError as e:
+        console.print(f"[bold red]Configuration error: {e}[/bold red]")
+        sys.exit(1)
+    except SearchError as e:
+        console.print(f"[bold red]Search error: {e}[/bold red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Pipeline error: {e}[/bold red]")
+        logging.exception("Unhandled pipeline error")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    # Mocking Teammate 1's Search Output for the Demo
-    # In a real run, this list would come directly from test_search.py
-    mock_candidates = [
-        {
-            "candidate_id": "001",
-            "url": "https://en.wikipedia.org/wiki/Mark_Zuckerberg",
-            "image_url": "https://upload.wikimedia.org/wikipedia/commons/1/18/Mark_Zuckerberg_F8_2019_Keynote_%2832830578717%29_%28cropped%29.jpg",
-            "title": "Mark Zuckerberg",
-            "source": "Wikipedia"
-        },
-        {
-            "candidate_id": "002",
-            "url": "https://en.wikipedia.org/wiki/Elon_Musk",
-            "image_url": "https://upload.wikimedia.org/wikipedia/commons/3/34/Elon_Musk_Royal_Society_%28crop2%29.jpg",
-            "title": "Elon Musk",
-            "source": "Wikipedia"
-        }
-    ]
-    
-    # You can change this to a local picture of Elon Musk to test!
-    LOCAL_QUERY_IMAGE = "query_face.jpg" 
-    
-    run_pipeline(LOCAL_QUERY_IMAGE, mock_candidates)
+    main()
