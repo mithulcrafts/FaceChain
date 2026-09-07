@@ -393,7 +393,7 @@ python test_search.py path/to/face.jpg
 
 ## 👥 Team
 
-Built at **Hacker House Goa 2026** — Task #3.
+Built for **Hacker House Goa 2026** — Task #3.
 
 ---
 
