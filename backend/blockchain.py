@@ -135,7 +135,6 @@ class VerificationResult:
     exists: bool
     submitter: str
     timestamp: int
-    source_url: str
     source_matches: bool
     hash_matches: bool
     source_url: str = ""
@@ -245,17 +244,27 @@ class EvidenceRegistryClient:
             stored_archive_uri=stored_archive_uri,
         )
 
-    def verify_evidence(self, evidence_hash: str, expected_source_url: Optional[str] = None) -> VerificationResult:
+    def verify_evidence(
+        self, 
+        evidence_hash: str, 
+        expected_source: Optional[str] = None,
+        expected_source_url: Optional[str] = None
+    ) -> VerificationResult:
         anchored = self.verify_anchor(evidence_hash)
         exists, submitter, timestamp, source, source_url, archive_uri = self.get_evidence_with_archive(evidence_hash)
-        source_matches = True if expected_source is None else (source == expected_source)
+        
+        source_matches = True
+        if expected_source is not None and source != expected_source:
+            source_matches = False
+        if expected_source_url is not None and source_url != expected_source_url:
+            source_matches = False
+
         return VerificationResult(
             evidence_hash=evidence_hash,
             anchored=anchored,
             exists=exists,
             submitter=submitter,
             timestamp=timestamp,
-            source_url=source_url,
             source_matches=source_matches,
             hash_matches=anchored and exists,
             source_url=source_url,

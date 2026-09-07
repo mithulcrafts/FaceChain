@@ -205,14 +205,21 @@ The accepted candidate's metadata is assembled into an `EvidenceRecord`. To ensu
 This record is serialized to JSON using **deterministic canonicalization** (sorted keys, no whitespace, UTF-8 encoding). This means: same evidence data → same JSON string → same hash. Always. On any machine, in any language.
 
 ### Step 5 — Blockchain Anchoring
-Now we store the final payload on the blockchain. The payload stored looks exactly like this:
+Now we store the final payload on the blockchain. The smart contract stores **six fields** per evidence record:
 
-**`Stored Payload = Evidence Hash + sourceUrl`**
+| On-Chain Field | Value |
+|---|---|
+| `evidenceHash` | SHA-256 fingerprint of the canonical evidence JSON |
+| `submitter` | Wallet address that anchored the evidence |
+| `timestamp` | Block timestamp when anchored |
+| `source` | Normalized source domain (e.g., `"forbes"`, `"x.com"`) |
+| `sourceUrl` | Full URL of the original web source |
+| `archiveUri` | IPFS backup URI for decentralized recovery |
 
-The `bytes32` evidence hash and `sourceUrl` string are sent to the `EvidenceRegistry` smart contract on **Base Sepolia** via Foundry's `cast send`. The contract stores the hash, submitter address, timestamp, and full source URL. It emits an `EvidenceAnchored` event and rejects duplicates.
+The pipeline calls `anchorEvidenceWithArchive(bytes32, string, string, string)` on the `EvidenceRegistry` smart contract deployed on **Base Sepolia** via Foundry's `cast send`. The contract validates all inputs (rejecting empty hashes, empty sources, empty URLs, and duplicate submissions), stores the record permanently, and emits an `EvidenceAnchored` event.
 
 ### Step 6 — On-Chain Verification
-Immediately after anchoring, the pipeline reads the record back from the blockchain using `cast call` and confirms that the stored data matches what was sent. This proves the record is genuinely on-chain and not just assumed from a successful broadcast.
+Immediately after anchoring, the pipeline reads the record back from the blockchain using `getEvidenceWithArchive()` via `cast call` and confirms that the stored data matches what was sent. It retries up to 5 times with 1-second delays to handle RPC propagation lag. This proves the record is genuinely on-chain and not just assumed from a successful broadcast.
 
 ---
 
@@ -230,15 +237,20 @@ For high-dimensional vectors like 512-D embeddings, cosine similarity is more ro
 ### Why Canonicalization Before Hashing?
 Two JSON strings with identical data but different formatting produce completely different SHA-256 hashes. By enforcing a canonical form (alphabetically sorted keys, no whitespace, UTF-8), we guarantee that the same evidence always produces the same hash — regardless of which machine or language generates it. This is critical for independent verification.
 
-### Why Store the Full URL On-Chain?
-If the blockchain only stored the evidence hash and a domain name (like `twitter.com`), a verifier would *need* our off-chain `evidence.json` file to know *which exact post* to verify. That breaks the trustless nature of the system! By storing the full `sourceUrl` on-chain alongside the hash, the smart contract acts as a completely independent public registry. 
+### Why Store Both Source Domain AND Full URL On-Chain?
+Our contract stores **three layers** of source information: the domain (`source`), the full URL (`sourceUrl`), and a decentralized backup (`archiveUri`). Here's why each matters:
+
+- **`source` (domain):** Enables cheap, gas-efficient lookups and filtering by source platform. "Show me all verifications from Wikipedia" becomes a simple event filter.
+- **`sourceUrl` (full URL):** If the blockchain only stored the domain name (like `twitter.com`), a verifier would *need* our off-chain `evidence.json` file to know *which exact post* to verify. That breaks the trustless nature of the system! The full URL makes the contract a completely independent public registry.
+- **`archiveUri` (IPFS backup):** If the original website deletes the image, the IPFS archive guarantees the evidence payload survives forever on a decentralized network.
 
 **Example of Public Verifiability:**
 1. You find a suspicious hash on the blockchain: `0xabc123...`
-2. You ask the smart contract: "What is this?" 
-3. The contract returns the full URL: `https://twitter.com/user/post`
-4. You run `python verify.py --evidence-hash 0xabc123...`
-5. The script automatically reads the URL from the blockchain, downloads the live image, and verifies it against the blockchain hash—**without ever needing an `evidence.json` file!**
+2. You call `getEvidenceWithArchive(0xabc123...)` on the smart contract.
+3. The contract returns all six fields: the submitter wallet, the timestamp, the source domain, the full URL, and the IPFS archive URI.
+4. You run `python verify.py --evidence-file evidence/evidence_0xabc123.json`
+5. The script reads the blockchain record, re-downloads the live image from the original URL, re-hashes it using the same deterministic canonicalization, and compares—**fully automated tamper detection.**
+6. If the original URL is dead, you can still recover the evidence from the IPFS `archiveUri`.
 
 ### Why Base Sepolia (not Ethereum Mainnet)?
 Base is an Ethereum Layer 2 rollup built on the OP Stack. It inherits Ethereum's security guarantees but with near-zero gas fees and fast block times. For a hackathon demo, this means we can anchor evidence instantly without paying real money, while the architecture is identical to a mainnet deployment.
@@ -418,20 +430,34 @@ python -m backend.cli verify-evidence --evidence-hash "0xabc123..." --pretty
 
 ### What It Stores
 
+Each `EvidenceRecord` struct stored on-chain contains:
+
 | Field | Type | Purpose |
 |-------|------|---------|
-| `evidenceHash` | `bytes32` | SHA-256 fingerprint of the canonical evidence JSON |
-| `submitter` | `address` | Wallet that anchored the evidence |
+| `evidenceHash` | `bytes32` | SHA-256 fingerprint of the canonical evidence JSON (mapping key) |
+| `exists` | `bool` | Whether the record has been anchored |
+| `submitter` | `address` | Wallet address that anchored the evidence |
 | `timestamp` | `uint64` | Block timestamp when anchored |
-| `source` | `string` | Normalized source domain (e.g., "twitter.com") |
-| `sourceUrl` | `string` | Original candidate/post URL |
-| `archiveUri` | `string` | Local archive or IPFS URI for recovery |
+| `source` | `string` | Normalized source domain (e.g., `"forbes"`, `"x.com"`, `"wikimedia commons"`) |
+| `sourceUrl` | `string` | Full URL of the original web source |
+| `archiveUri` | `string` | IPFS URI for decentralized backup/recovery |
+
+### Contract Functions
+
+| Function | Type | Purpose |
+|----------|------|---------|
+| `anchorEvidenceWithArchive(bytes32, string, string, string)` | write | Store evidence with source, URL, and IPFS archive |
+| `anchorEvidence(bytes32, string)` | write | Simplified anchor (source domain only) |
+| `verifyEvidence(bytes32)` | view | Quick boolean check: does this hash exist on-chain? |
+| `getEvidence(bytes32)` | view | Returns `(exists, submitter, timestamp, sourceUrl)` |
+| `getEvidenceWithArchive(bytes32)` | view | Returns all 6 fields including `source` and `archiveUri` |
 
 ### Key Design Choices
 
-- **Minimal storage.** No images, face embeddings, or raw post content are stored on-chain. The registry stores the evidence hash plus pointers to the original source and an archive, keeping gas costs low while preserving recoverability.
-- **Fail closed.** Empty hashes, empty sources, and duplicate submissions all revert with custom errors. The contract never stores garbage data.
-- **Single event emission.** `EvidenceAnchored` is emitted on every successful anchor, making it trivial to index and monitor from off-chain.
+- **Privacy by design.** No images, face embeddings, or raw post content are stored on-chain. The registry stores the evidence hash plus pointers to the original source and an IPFS archive, keeping gas costs low while preserving full recoverability.
+- **Fail closed.** Empty hashes, empty source URLs, and duplicate submissions all revert with custom Solidity errors (`EmptyEvidenceHash`, `EmptySourceUrl`, `EmptyArchiveUri`, `EvidenceAlreadyAnchored`). The contract never stores garbage data.
+- **Single event emission.** `EvidenceAnchored(bytes32 indexed evidenceHash, uint64 timestamp, string source, string sourceUrl, string archiveUri)` is emitted on every successful anchor, making it trivial to index and monitor from off-chain services or block explorers.
+- **Dual entry points.** `anchorEvidence` provides a gas-efficient path for domain-only anchoring, while `anchorEvidenceWithArchive` enforces full archival with URL + IPFS backup.
 
 ### Deploy
 
@@ -443,7 +469,7 @@ forge script script/DeployEvidenceRegistry.s.sol:DeployEvidenceRegistry \
   --verify
 ```
 
-Archive-aware anchoring requires deploying this updated registry and replacing `EVIDENCE_REGISTRY` with the new address. Existing deployments only support the legacy evidence fields and cannot return an archive URI.
+After deployment, update the `EVIDENCE_REGISTRY` address in `backend/.env` with the new contract address.
 
 ### Verify On-Chain
 
@@ -501,13 +527,13 @@ We built a dedicated script — `verify.py` — that automates this entire tampe
 Here is the exact process `verify.py` follows:
 
 #### Step 1 — Read the Blockchain
-The script connects to the Base Sepolia smart contract and asks:
-> *"Hey blockchain, do you have a record for this evidence hash? What was the original SHA-256 fingerprint, the submitter's wallet, the timestamp, and the source domain?"*
+The script connects to the Base Sepolia smart contract via `getEvidence()` and asks:
+> *"Hey blockchain, do you have a record for this evidence hash? What was the original submitter's wallet, the timestamp, and the source URL?"*
 
-If the record exists, the script prints the on-chain data. If it doesn't exist, the script stops immediately and tells you the evidence was never anchored.
+If the record exists, the script prints the on-chain data (submitter address, timestamp, source domain). If it doesn't exist, the script stops immediately and tells you the evidence was never anchored.
 
 #### Step 2 — Scrape the Live Web
-The script goes back to the **exact same URL** on the live internet and **re-downloads the current version** of the image. This is the "live" version — whatever exists on the web *right now*.
+The script goes back to the **exact same image URL** from the evidence file and **re-downloads the current version** of the image. This is the "live" version — whatever exists on the web *right now*.
 
 It also performs a MIME-type check to make sure the URL still returns an image (not an HTML error page or a CAPTCHA).
 
@@ -555,7 +581,13 @@ python verify.py --evidence-hash 0xYOUR_HASH_HERE --check-only
 
 #### Full Tamper Check: Re-download + Re-hash + Compare
 
-This goes back to the live web, re-downloads the image, and compares:
+The easiest way is to pass the saved evidence file — it contains everything:
+
+```bash
+python verify.py --evidence-file evidence/evidence_0xYOUR_HASH.json
+```
+
+Alternatively, you can provide parameters manually:
 
 ```bash
 python verify.py \

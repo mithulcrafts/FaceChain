@@ -94,34 +94,33 @@ class FaceProcessor:
         if self._app is not None:
             try:
                 faces = self._app.get(img_bgr)
-                if faces:
-                    results: List[FaceDetectionResult] = []
-                    for face in faces:
-                        bbox = face.bbox.astype(float).tolist()
-                        det_score = float(face.det_score)
-                        embedding = face.embedding.astype(float).tolist() if face.embedding is not None else []
-                        landmarks = face.kps.astype(float).tolist() if hasattr(face, "kps") and face.kps is not None else None
-                        
-                        crop_shape = None
-                        if hasattr(face, "norm_crop") and face.norm_crop is not None:
-                            crop_shape = list(face.norm_crop.shape)
+                results: List[FaceDetectionResult] = []
+                for face in faces:
+                    bbox = face.bbox.astype(float).tolist()
+                    det_score = float(face.det_score)
+                    embedding = face.embedding.astype(float).tolist() if face.embedding is not None else []
+                    landmarks = face.kps.astype(float).tolist() if hasattr(face, "kps") and face.kps is not None else None
+                    
+                    crop_shape = None
+                    if hasattr(face, "norm_crop") and face.norm_crop is not None:
+                        crop_shape = list(face.norm_crop.shape)
 
-                        results.append(
-                            FaceDetectionResult(
-                                bbox=bbox,
-                                det_score=det_score,
-                                embedding=embedding,
-                                landmarks=landmarks,
-                                aligned_face_shape=crop_shape,
-                            )
+                    results.append(
+                        FaceDetectionResult(
+                            bbox=bbox,
+                            det_score=det_score,
+                            embedding=embedding,
+                            landmarks=landmarks,
+                            aligned_face_shape=crop_shape,
                         )
-
-                    # Sort faces by bounding box area (width * height) descending
-                    results.sort(
-                        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), 
-                        reverse=True
                     )
-                    return results
+
+                # Sort faces by bounding box area (width * height) descending
+                results.sort(
+                    key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), 
+                    reverse=True
+                )
+                return results
             except Exception as exc:
                 logger.warning(f"InsightFace processing failed: {exc}. Using fallback detector.")
 
