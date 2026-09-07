@@ -280,6 +280,8 @@ FaceID_Verification/
 ├── test/                            # Solidity unit tests (forge test)
 ├── tests/                           # Python unit tests (pytest)
 │
+├── evidence/                        # Auto-saved evidence packages (JSON, gitignored)
+│
 ├── foundry.toml                     # Foundry configuration (Base Sepolia)
 └── .gitignore
 ```
@@ -557,34 +559,55 @@ python verify.py \
 
 ### Where do I get the evidence hash?
 
-When you run the main pipeline (`python main.py face.jpg` or `python -m backend.cli run face.jpg --summary`), the output includes the evidence hash. It looks like this:
+When you run the main pipeline, it **automatically saves an evidence file** to the `evidence/` directory:
 
 ```
-Evidence
-  Evidence hash: 0x7a3b9f...  ← Copy this value
-  Image SHA-256: 4e2c8d...
+  ✓ Evidence saved: evidence/evidence_0x7a3b9f1234567890.json
+  │  Tip: Use this file with verify.py: python verify.py --evidence-file evidence/evidence_0x7a3b9f1234567890.json
 ```
 
-Save that `Evidence hash` value. That's what you pass to `verify.py --evidence-hash`.
+This JSON file contains everything needed for verification: the evidence hash, the source URL, the image hash, the matched candidate details, and the blockchain transaction info.
 
 ### End-to-End Example: Full Workflow
 
 ```bash
-# Step 1: Run the pipeline to find and verify a face
-python main.py my_photo.jpg --no-anchor
-# Output: Evidence hash → 0x7a3b9f...
+# Step 1: Run the pipeline (evidence file is auto-saved to evidence/)
+python main.py my_photo.jpg
+# Output: evidence/evidence_0x7a3b9f1234567890.json saved
 
-# Step 2: Anchor on the blockchain (when blockchain keys are configured)
-python -m backend.cli run my_photo.jpg --summary
-# Output: Transaction hash, evidence hash → 0x7a3b9f...
+# Step 2: Later, verify using the saved evidence file (easiest method)
+python verify.py --evidence-file evidence/evidence_0x7a3b9f1234567890.json
+# Output: ✓ VERIFIED or ✗ TAMPERED or ⚠ UNAVAILABLE
 
-# Step 3: Later (hours, days, or years from now), check for tampering
+# Alternative: verify by hash (auto-discovers the evidence file)
+python verify.py --evidence-hash 0x7a3b9f...
+
+# Alternative: fully manual (no evidence file needed)
 python verify.py \
   --evidence-hash 0x7a3b9f... \
   --source-url "https://twitter.com/user/post" \
   --image-url "https://pbs.twimg.com/media/photo.jpg"
-# Output: ✓ VERIFIED or ✗ TAMPERED
 ```
+
+### How Post Identity Works (Same Post vs. Different Post)
+
+A common question: *"SHA-256 only tells us if the content changed — how do we know if it's the same post that was modified, or a completely different post?"*
+
+**The answer: the URL is baked into the hash.**
+
+The `source_url` is one of the fields inside the canonical evidence record. This means:
+
+| Scenario | URL | Content | Result |
+|---|---|---|---|
+| Same post, same content | `twitter.com/post/123` | Unchanged | Same hash → **VERIFIED** |
+| Same post, content changed | `twitter.com/post/123` | Photo swapped | Different hash → **TAMPERED** |
+| Completely different post | `twitter.com/post/456` | Different post | Different hash, but different blockchain record |
+
+When the pipeline runs again and finds a **different** post (Post B instead of Post A):
+- Post A → `evidence_hash_A` → blockchain record A
+- Post B → `evidence_hash_B` → blockchain record B (new, independent record)
+
+The system **never overwrites** old records. Each verification is its own immutable entry on the blockchain. If Post A is deleted and Post B is found later, both records coexist independently on-chain.
 
 ---
 

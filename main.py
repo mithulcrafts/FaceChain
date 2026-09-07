@@ -15,6 +15,7 @@ Usage:
 import sys
 import os
 import time
+import json
 import argparse
 import logging
 from pathlib import Path
@@ -354,7 +355,64 @@ def run_pipeline(image_path: str, anchor: bool = True, verify: bool = True):
     ))
     console.print()
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SAVE EVIDENCE PACKAGE TO DISK
+    # ═══════════════════════════════════════════════════════════════════════
+    if result.evidence and result.status != "rejected":
+        save_evidence_package(result)
+
     return result
+
+
+def save_evidence_package(result: FaceChainResult):
+    """Persist the evidence package to evidence/ directory for later verification."""
+    evidence_dir = Path(__file__).parent / "evidence"
+    evidence_dir.mkdir(exist_ok=True)
+
+    ev = result.evidence
+    # Use short hash as filename for uniqueness
+    short_hash = ev.evidence_hash[:18]  # 0x + 16 hex chars
+    filename = f"evidence_{short_hash}.json"
+
+    package = {
+        "evidence_hash": ev.evidence_hash,
+        "source_url": ev.candidate_url,
+        "source_domain": ev.candidate_source,
+        "image_sha256": ev.candidate_image_sha256,
+        "candidate_id": ev.candidate_id,
+        "canonical_json": ev.canonical_json,
+        "record": ev.record.model_dump(),
+        "input_image": result.input_image_path,
+        "pipeline_status": result.status,
+        "pipeline_reason": result.reason,
+        "saved_at": datetime.now().isoformat(),
+    }
+
+    if result.accepted_candidate:
+        ac = result.accepted_candidate
+        package["matched_candidate"] = {
+            "title": ac.candidate.title,
+            "url": ac.candidate.url,
+            "source": ac.candidate.source,
+            "face_similarity": ac.face_similarity,
+            "image_similarity": ac.image_similarity,
+            "overall_score": ac.overall_score,
+        }
+
+    if result.anchor:
+        package["blockchain"] = {
+            "tx_hash": result.anchor.transaction_hash,
+            "stored_source": result.anchor.stored_source,
+            "stored_timestamp": result.anchor.stored_timestamp,
+        }
+
+    filepath = evidence_dir / filename
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(package, f, indent=2, ensure_ascii=False)
+
+    _log_ok(f"Evidence saved: [underline]evidence/{filename}[/underline]")
+    _log_data("Tip", "Use this file with verify.py: python verify.py --evidence-file evidence/" + filename, "dim")
+    console.print()
 
 
 def main():
