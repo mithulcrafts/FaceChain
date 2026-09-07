@@ -412,6 +412,7 @@ While a generic solution might pipe an image through a search API and blindly du
 
 Built for **Hacker House Goa 2026** — Task #3.
 
+**The team who worked on this:**
 - [Rohinth S](https://github.com/rohinths) 
 - [Suyash Agarwal](https://github.com/SuyashAlphaC)
 - [Mithul Nama](https://github.com/mithulcrafts)
