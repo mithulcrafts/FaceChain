@@ -226,17 +226,19 @@ Foundry's `cast` is a battle-tested CLI tool that speaks directly to EVM nodes. 
 
 ---
 
-##  Fault-Tolerant Design
+##  Edge Cases & Fault-Tolerant Design
 
-This pipeline was built to survive the wild internet:
+This pipeline was built to survive the wild internet and handle complex edge cases:
 
-| Feature | Why it matters |
-|---------|---------------|
-| **MIME-Type Validation** | The downloader checks `Content-Type` headers before saving. If a URL returns HTML (like a CAPTCHA page) instead of an image, it is rejected immediately — preventing the ML engine from crashing on corrupt input. |
+| Feature / Edge Case | How we handle it |
+|---------------------|------------------|
+| **Dead/Blocked URLs (UNAVAILABLE)** | If a source URL goes offline, gets deleted, or is blocked by a CAPTCHA, `verify.py` does not falsely report "Tampered". It explicitly returns **⚠ UNAVAILABLE** (Exit Code 3). Inaccessibility ≠ Cryptographic Alteration. |
+| **Post Identity (Same vs Different)** | We bake the `source_url` directly into the canonical JSON before hashing. If a user deletes Post A and creates Post B, it generates a totally new hash and a new blockchain record, rather than falsely flagging Post A as tampered. |
+| **MIME-Type Validation** | The downloader checks `Content-Type` headers before saving. If a URL returns HTML (like a login wall) instead of an image, it is rejected immediately — preventing the ML engine from crashing on corrupt input. |
 | **Strict Timeout Enforcement** | Every HTTP request has a 10-20 second timeout. A broken link will never freeze the pipeline. |
 | **Automatic Image Compression** | Images exceeding SerpApi's 500KB upload limit are automatically resized and compressed via PIL before upload. |
 | **Duplicate Anchoring Guard** | The smart contract reverts with `EvidenceAlreadyAnchored` if the same hash is submitted twice. The Python client catches this gracefully and reuses the existing record. |
-| **Receipt Polling with Retry** | After broadcasting a transaction, the pipeline polls the RPC node up to 5 times with 1-second delays to confirm the evidence was actually mined — not just broadcast. |
+| **Receipt Polling with Retry** | After broadcasting a transaction, the pipeline polls the RPC node up to 5 times with 1-second delays to confirm the evidence was actually mined. |
 | **Graceful Fallback** | If InsightFace fails to initialize, the face processor falls back to OpenCV's Haar Cascade detector. The pipeline degrades gracefully instead of crashing. |
 | **Privacy by Design** | No face image, no embedding vector, and no raw social media content is ever stored on-chain. Only the deterministic SHA-256 hash and a source reference go on-chain. |
 
@@ -279,6 +281,8 @@ FaceID_Verification/
 │
 ├── test/                            # Solidity unit tests (forge test)
 ├── tests/                           # Python unit tests (pytest)
+│
+├── evidence/                        # Auto-saved evidence packages (JSON, gitignored)
 │
 ├── foundry.toml                     # Foundry configuration (Base Sepolia)
 └── .gitignore
@@ -475,6 +479,8 @@ The script goes back to the **exact same URL** on the live internet and **re-dow
 
 It also performs a MIME-type check to make sure the URL still returns an image (not an HTML error page or a CAPTCHA).
 
+**Edge Case: What if the URL is dead?** If the post was deleted by the owner, the server is down, or a login wall/CAPTCHA blocks the script, the tool returns an **UNAVAILABLE** verdict. It does **not** call it "tampered", because inaccessibility is not proof of cryptographic alteration.
+
 #### Step 3 — Re-Hash
 The script takes the freshly downloaded image, computes its SHA-256 hash, rebuilds the evidence record using the **same deterministic canonicalization** that was used during the original pipeline run, and generates a **new evidence hash**.
 
@@ -485,8 +491,9 @@ The script compares the **new hash** (from the live web) to the **original hash*
 
 | Scenario | What it means |
 |----------|---------------|
-| **Hashes match** | The source content is **pristine**. Nothing has been changed since the original verification. |
-| **Hashes differ** | The source content has been **tampered with**. Something changed — even a single pixel or letter is enough to produce a completely different hash. |
+| **Hashes match (✓ VERIFIED)** | The source content is **pristine**. Nothing has been changed since the original verification. |
+| **Hashes differ (✗ TAMPERED)** | The source content has been **tampered with**. Something changed — even a single pixel or letter is enough to produce a completely different hash. |
+| **Download fails (⚠ UNAVAILABLE)** | The URL is dead or blocked. This is **not** proof of tampering, just proof of inaccessibility. |
 
 ### Running the Tamper Check
 
@@ -567,34 +574,55 @@ python verify.py \
 
 ### Where do I get the evidence hash?
 
-When you run the main pipeline (`python main.py face.jpg` or `python -m backend.cli run face.jpg --summary`), the output includes the evidence hash. It looks like this:
+When you run the main pipeline, it **automatically saves an evidence file** to the `evidence/` directory:
 
 ```
-Evidence
-  Evidence hash: 0x7a3b9f...  ← Copy this value
-  Image SHA-256: 4e2c8d...
+  ✓ Evidence saved: evidence/evidence_0x7a3b9f1234567890.json
+  │  Tip: Use this file with verify.py: python verify.py --evidence-file evidence/evidence_0x7a3b9f1234567890.json
 ```
 
-Save that `Evidence hash` value. That's what you pass to `verify.py --evidence-hash`.
+This JSON file contains everything needed for verification: the evidence hash, the source URL, the image hash, the matched candidate details, and the blockchain transaction info.
 
 ### End-to-End Example: Full Workflow
 
 ```bash
-# Step 1: Run the pipeline to find and verify a face
-python main.py my_photo.jpg --no-anchor
-# Output: Evidence hash → 0x7a3b9f...
+# Step 1: Run the pipeline (evidence file is auto-saved to evidence/)
+python main.py my_photo.jpg
+# Output: evidence/evidence_0x7a3b9f1234567890.json saved
 
-# Step 2: Anchor on the blockchain (when blockchain keys are configured)
-python -m backend.cli run my_photo.jpg --summary
-# Output: Transaction hash, evidence hash → 0x7a3b9f...
+# Step 2: Later, verify using the saved evidence file (easiest method)
+python verify.py --evidence-file evidence/evidence_0x7a3b9f1234567890.json
+# Output: ✓ VERIFIED or ✗ TAMPERED or ⚠ UNAVAILABLE
 
-# Step 3: Later (hours, days, or years from now), check for tampering
+# Alternative: verify by hash (auto-discovers the evidence file)
+python verify.py --evidence-hash 0x7a3b9f...
+
+# Alternative: fully manual (no evidence file needed)
 python verify.py \
   --evidence-hash 0x7a3b9f... \
   --source-url "https://twitter.com/user/post" \
   --image-url "https://pbs.twimg.com/media/photo.jpg"
-# Output: ✓ VERIFIED or ✗ TAMPERED
 ```
+
+### How Post Identity Works (Same Post vs. Different Post)
+
+A common question: *"SHA-256 only tells us if the content changed — how do we know if it's the same post that was modified, or a completely different post?"*
+
+**The answer: the URL is baked into the hash.**
+
+The `source_url` is one of the fields inside the canonical evidence record. This means:
+
+| Scenario | URL | Content | Result |
+|---|---|---|---|
+| Same post, same content | `twitter.com/post/123` | Unchanged | Same hash → **VERIFIED** |
+| Same post, content changed | `twitter.com/post/123` | Photo swapped | Different hash → **TAMPERED** |
+| Completely different post | `twitter.com/post/456` | Different post | Different hash, but different blockchain record |
+
+When the pipeline runs again and finds a **different** post (Post B instead of Post A):
+- Post A → `evidence_hash_A` → blockchain record A
+- Post B → `evidence_hash_B` → blockchain record B (new, independent record)
+
+The system **never overwrites** old records. Each verification is its own immutable entry on the blockchain. If Post A is deleted and Post B is found later, both records coexist independently on-chain.
 
 ---
 

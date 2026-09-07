@@ -204,6 +204,39 @@ def compare_hashes(original_hash: str, new_hash: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Evidence file loader
+# ─────────────────────────────────────────────────────────────────────────────
+def load_evidence_file(filepath: str) -> dict:
+    """Load a saved evidence package JSON file."""
+    path = Path(filepath)
+    if not path.is_file():
+        # Try relative to project root
+        alt = Path(__file__).parent / filepath
+        if alt.is_file():
+            path = alt
+        else:
+            return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def find_evidence_file_by_hash(evidence_hash: str) -> dict:
+    """Auto-discover an evidence file in evidence/ directory by hash prefix."""
+    evidence_dir = Path(__file__).parent / "evidence"
+    if not evidence_dir.is_dir():
+        return {}
+    for f in evidence_dir.glob("evidence_*.json"):
+        try:
+            with open(f, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if data.get("evidence_hash", "").lower() == evidence_hash.lower():
+                return data
+        except (json.JSONDecodeError, OSError):
+            continue
+    return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
@@ -212,16 +245,57 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Easiest: load everything from a saved evidence file
+  python verify.py --evidence-file evidence/evidence_0x7a3b9f1234567890.json
+
+  # Manual: specify hash and URLs directly
   python verify.py --evidence-hash 0xabc123... --source-url https://twitter.com/user/post --image-url https://pbs.twimg.com/media/photo.jpg
+
+  # Quick blockchain lookup (does it exist?)
   python verify.py --evidence-hash 0xabc123... --check-only
         """,
     )
-    parser.add_argument("--evidence-hash", required=True, help="The 0x-prefixed SHA-256 evidence hash anchored on-chain.")
+    parser.add_argument("--evidence-hash", default="", help="The 0x-prefixed SHA-256 evidence hash anchored on-chain.")
+    parser.add_argument("--evidence-file", default="", help="Path to a saved evidence JSON file (auto-fills hash, URLs).")
     parser.add_argument("--source-url", default="", help="The original source URL of the social media post.")
     parser.add_argument("--image-url", default="", help="The direct URL to the image.")
     parser.add_argument("--check-only", action="store_true", help="Only check if the evidence exists on-chain.")
 
     args = parser.parse_args()
+
+    # ── Load evidence file if provided ───────────────────────────────────
+    evidence_data = {}
+    if args.evidence_file:
+        evidence_data = load_evidence_file(args.evidence_file)
+        if not evidence_data:
+            _log_fail(f"Could not load evidence file: {args.evidence_file}")
+            sys.exit(1)
+        _log_ok(f"Loaded evidence file: [underline]{args.evidence_file}[/underline]")
+
+    # Fill in missing args from evidence file
+    if not args.evidence_hash and evidence_data:
+        args.evidence_hash = evidence_data.get("evidence_hash", "")
+    if not args.source_url and evidence_data:
+        args.source_url = evidence_data.get("source_url", "")
+    if not args.image_url and evidence_data:
+        # Try to get the image URL from the matched candidate
+        mc = evidence_data.get("matched_candidate", {})
+        args.image_url = mc.get("url", "") or evidence_data.get("source_url", "")
+
+    # Auto-discover evidence file by hash if no file was provided
+    if not evidence_data and args.evidence_hash:
+        evidence_data = find_evidence_file_by_hash(args.evidence_hash)
+        if evidence_data:
+            _log_ok("Auto-discovered saved evidence file for this hash.")
+            if not args.source_url:
+                args.source_url = evidence_data.get("source_url", "")
+            if not args.image_url:
+                mc = evidence_data.get("matched_candidate", {})
+                args.image_url = mc.get("url", "") or evidence_data.get("source_url", "")
+
+    if not args.evidence_hash:
+        _log_fail("No evidence hash provided. Use --evidence-hash or --evidence-file.")
+        sys.exit(1)
 
     # ── BANNER ───────────────────────────────────────────────────────────
     if HAS_RICH:
