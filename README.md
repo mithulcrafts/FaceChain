@@ -226,17 +226,19 @@ Foundry's `cast` is a battle-tested CLI tool that speaks directly to EVM nodes. 
 
 ---
 
-##  Fault-Tolerant Design
+##  Edge Cases & Fault-Tolerant Design
 
-This pipeline was built to survive the wild internet:
+This pipeline was built to survive the wild internet and handle complex edge cases:
 
-| Feature | Why it matters |
-|---------|---------------|
-| **MIME-Type Validation** | The downloader checks `Content-Type` headers before saving. If a URL returns HTML (like a CAPTCHA page) instead of an image, it is rejected immediately — preventing the ML engine from crashing on corrupt input. |
+| Feature / Edge Case | How we handle it |
+|---------------------|------------------|
+| **Dead/Blocked URLs (UNAVAILABLE)** | If a source URL goes offline, gets deleted, or is blocked by a CAPTCHA, `verify.py` does not falsely report "Tampered". It explicitly returns **⚠ UNAVAILABLE** (Exit Code 3). Inaccessibility ≠ Cryptographic Alteration. |
+| **Post Identity (Same vs Different)** | We bake the `source_url` directly into the canonical JSON before hashing. If a user deletes Post A and creates Post B, it generates a totally new hash and a new blockchain record, rather than falsely flagging Post A as tampered. |
+| **MIME-Type Validation** | The downloader checks `Content-Type` headers before saving. If a URL returns HTML (like a login wall) instead of an image, it is rejected immediately — preventing the ML engine from crashing on corrupt input. |
 | **Strict Timeout Enforcement** | Every HTTP request has a 10-20 second timeout. A broken link will never freeze the pipeline. |
 | **Automatic Image Compression** | Images exceeding SerpApi's 500KB upload limit are automatically resized and compressed via PIL before upload. |
 | **Duplicate Anchoring Guard** | The smart contract reverts with `EvidenceAlreadyAnchored` if the same hash is submitted twice. The Python client catches this gracefully and reuses the existing record. |
-| **Receipt Polling with Retry** | After broadcasting a transaction, the pipeline polls the RPC node up to 5 times with 1-second delays to confirm the evidence was actually mined — not just broadcast. |
+| **Receipt Polling with Retry** | After broadcasting a transaction, the pipeline polls the RPC node up to 5 times with 1-second delays to confirm the evidence was actually mined. |
 | **Graceful Fallback** | If InsightFace fails to initialize, the face processor falls back to OpenCV's Haar Cascade detector. The pipeline degrades gracefully instead of crashing. |
 | **Privacy by Design** | No face image, no embedding vector, and no raw social media content is ever stored on-chain. Only the deterministic SHA-256 hash and a source reference go on-chain. |
 
@@ -467,6 +469,8 @@ The script goes back to the **exact same URL** on the live internet and **re-dow
 
 It also performs a MIME-type check to make sure the URL still returns an image (not an HTML error page or a CAPTCHA).
 
+**Edge Case: What if the URL is dead?** If the post was deleted by the owner, the server is down, or a login wall/CAPTCHA blocks the script, the tool returns an **UNAVAILABLE** verdict. It does **not** call it "tampered", because inaccessibility is not proof of cryptographic alteration.
+
 #### Step 3 — Re-Hash
 The script takes the freshly downloaded image, computes its SHA-256 hash, rebuilds the evidence record using the **same deterministic canonicalization** that was used during the original pipeline run, and generates a **new evidence hash**.
 
@@ -477,8 +481,9 @@ The script compares the **new hash** (from the live web) to the **original hash*
 
 | Scenario | What it means |
 |----------|---------------|
-| **Hashes match** | The source content is **pristine**. Nothing has been changed since the original verification. |
-| **Hashes differ** | The source content has been **tampered with**. Something changed — even a single pixel or letter is enough to produce a completely different hash. |
+| **Hashes match (✓ VERIFIED)** | The source content is **pristine**. Nothing has been changed since the original verification. |
+| **Hashes differ (✗ TAMPERED)** | The source content has been **tampered with**. Something changed — even a single pixel or letter is enough to produce a completely different hash. |
+| **Download fails (⚠ UNAVAILABLE)** | The URL is dead or blocked. This is **not** proof of tampering, just proof of inaccessibility. |
 
 ### Running the Tamper Check
 
