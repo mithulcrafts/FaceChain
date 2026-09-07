@@ -317,8 +317,26 @@ Examples:
     t1 = time.perf_counter()
 
     if image_bytes is None:
-        _log_fail("Failed to download live image. URL may be broken, blocked, or returning non-image content.")
-        sys.exit(1)
+        _log_fail("Source URL is no longer accessible or did not return an image.")
+        if HAS_RICH:
+            console.print(Panel(
+                "[bold yellow]⚠ UNAVAILABLE: Source content cannot be retrieved[/bold yellow]\n\n"
+                "The URL did not return a valid image. This does [bold]NOT[/bold] necessarily\n"
+                "mean the evidence was tampered with. Possible reasons:\n\n"
+                "  • The content was deleted by the owner\n"
+                "  • The server is temporarily down\n"
+                "  • The URL is behind a login wall or CAPTCHA\n"
+                "  • The website is blocking automated requests\n\n"
+                f"[dim]URL: {image_url}\n"
+                f"Checked at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]",
+                border_style="yellow",
+                title="[bold yellow]◆ VERDICT: UNAVAILABLE ◆[/bold yellow]",
+                padding=(1, 3),
+            ))
+        else:
+            print("\n  [⚠] UNAVAILABLE: Source content cannot be retrieved.")
+            print("      This does NOT necessarily mean the evidence was tampered with.")
+        sys.exit(3)
 
     _log_ok(f"Downloaded in [bold]{t1 - t0:.1f}s[/bold]")
     _log_data("Payload size", f"{len(image_bytes):,} bytes ({len(image_bytes) / 1024:.1f} KB)")
