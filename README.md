@@ -390,6 +390,13 @@ While a generic solution might pipe an image through a search API and blindly du
 
 ---
 
+## 📝 Notes to Consider
+
+- **Web Presence Dependency:** Search accuracy heavily depends on the individual's web footprint. If the person in the input image has minimal web presence, the reverse image search may return few or no candidates.
+- **Strict Biometric Angles:** The localized facial recognition model is highly optimized for front-facing biometrics. Extreme side-profiles or heavy occlusions (such as masks or dark glasses) may result in encoding failures or reduced accuracy.
+
+---
+
 ## 🏗️ Blockchain Used
 
 **Base Sepolia** — An Ethereum Layer 2 testnet built on the OP Stack (Optimism).
